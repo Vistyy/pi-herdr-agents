@@ -20,7 +20,7 @@ It does not fall back to unmanaged child processes.
 Install a released version from GitHub:
 
 ```sh
-pi install git:github.com/Vistyy/pi-herdr-agents@v0.1.2
+pi install git:github.com/Vistyy/pi-herdr-agents@v0.1.4
 ```
 
 Install a local checkout:

@@ -208,6 +208,14 @@ function registerTools(pi: ExtensionAPI, config: ExtensionConfig, getManager: ()
       });
       return toolResult(formatResults(records), records);
     },
+    renderResult(result, { isPartial }, _theme, context) {
+      if (context.isError) return singleLineComponent("Wait failed");
+      const details = result.details as { progress?: WaitProgress } | undefined;
+      if (isPartial && details?.progress) {
+        return inlineListComponent("", formatWaitItems(details.progress));
+      }
+      return singleLineComponent("Done");
+    },
   });
 
   pi.registerTool({
@@ -282,9 +290,13 @@ function formatResults(records: OwnedAgentRecord[]): string {
 }
 
 function formatWaitProgress(progress: WaitProgress): string {
-  const completed = progress.completed.length > 0 ? progress.completed.join(", ") : "none";
-  const waiting = progress.waiting.length > 0 ? progress.waiting.join(", ") : "none";
-  return `Selected: ${progress.selected.join(", ")}\nCompleted: ${completed}\nStill waiting: ${waiting}`;
+  const items = formatWaitItems(progress);
+  return items.length > 0 ? items.join(" | ") : "No agents";
+}
+
+function formatWaitItems(progress: WaitProgress): string[] {
+  const completed = new Set(progress.completed);
+  return progress.selected.map((name) => `${name} ${completed.has(name) ? "✓" : "…"}`);
 }
 
 function updateAgentWidget(ctx: ExtensionContext, records: OwnedAgentRecord[], claimedNames: string[]): void {
@@ -297,10 +309,45 @@ function updateAgentWidget(ctx: ExtensionContext, records: OwnedAgentRecord[], c
     ctx.ui.setWidget("pi-herdr-agents", undefined);
     return;
   }
-  ctx.ui.setWidget("pi-herdr-agents", [
-    "Owned agents",
-    ...visible.map((record) => `- ${record.name}: ${record.status}${claimed.has(record.name) ? " (wait_agents)" : ""}`),
-  ]);
+  const items = visible.map((record) =>
+    `${record.name} [${record.status}${claimed.has(record.name) ? "/wait" : ""}]`,
+  );
+  ctx.ui.setWidget("pi-herdr-agents", () => ({
+    render(width) {
+      return wrapInline("Agents: ", items, width);
+    },
+    invalidate() {},
+  }));
+}
+
+function singleLineComponent(text: string) {
+  return inlineListComponent("", [text]);
+}
+
+function inlineListComponent(prefix: string, items: string[]) {
+  return {
+    render(width: number) {
+      return wrapInline(prefix, items, width);
+    },
+    invalidate() {},
+  };
+}
+
+function wrapInline(prefix: string, items: string[], width: number): string[] {
+  if (width <= 0) return [""];
+  const lines: string[] = [];
+  let line = prefix;
+  for (const item of items) {
+    const separator = line === prefix ? "" : " | ";
+    if (line.length > prefix.length && line.length + separator.length + item.length > width) {
+      lines.push(line.slice(0, width));
+      line = `${" ".repeat(prefix.length)}${item}`;
+    } else {
+      line += `${separator}${item}`;
+    }
+  }
+  lines.push(line.slice(0, width));
+  return lines;
 }
 
 function notificationKey(record: OwnedAgentRecord): string {
