@@ -20,7 +20,7 @@ It does not fall back to unmanaged child processes.
 Install a released version from GitHub:
 
 ```sh
-pi install git:github.com/Vistyy/pi-herdr-agents@v0.1.1
+pi install git:github.com/Vistyy/pi-herdr-agents@v0.1.2
 ```
 
 Install a local checkout:
@@ -182,6 +182,8 @@ Sending a message to a closed agent resumes its Pi session in a new tab.
 
 Completion sends a follow-up message to the parent and triggers a parent turn.
 Calling `wait_agents` before completion claims the selected results and suppresses that automatic notification.
+While `wait_agents` runs, its tool row reports the selected agents, completed agents, and agents that are still pending.
+In TUI mode, a widget above the editor shows each live owned agent's status and marks agents claimed by `wait_agents`.
 
 Only the same parent Pi session can list or resume its owned agents.
 Forked and unrelated Pi sessions do not adopt them.

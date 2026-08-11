@@ -14,9 +14,16 @@ interface TurnState {
   resolve: (record: OwnedAgentRecord) => void;
 }
 
+export interface WaitProgress {
+  selected: string[];
+  completed: string[];
+  waiting: string[];
+}
+
 export interface ManagerCallbacks {
   persist(records: OwnedAgentRecord[]): void;
   notify(record: OwnedAgentRecord): void;
+  changed?(): void;
   resolveRuntime?(identity: AgentIdentity, cwd: string): Promise<RuntimeSettings>;
 }
 
@@ -38,6 +45,13 @@ export class AgentManager {
 
   getRecords(): OwnedAgentRecord[] {
     return [...this.records.values()].sort((left, right) => left.updatedAt - right.updatedAt).map(cloneRecord);
+  }
+
+  getClaimedNames(): string[] {
+    return [...this.turns.entries()]
+      .filter(([, turn]) => turn.claimed)
+      .map(([name]) => name)
+      .sort();
   }
 
   async restore(records: OwnedAgentRecord[]): Promise<void> {
@@ -185,23 +199,37 @@ export class AgentManager {
     return cloneRecord(record);
   }
 
-  async wait(names?: string[], signal?: AbortSignal): Promise<OwnedAgentRecord[]> {
+  async wait(
+    names?: string[],
+    signal?: AbortSignal,
+    onProgress?: (progress: WaitProgress) => void,
+  ): Promise<OwnedAgentRecord[]> {
     const selected = names?.length ? names.map((name) => this.requireRecord(name)) : [...this.records.values()].filter((record) => record.status === "working");
     const selections = selected.map((record) => ({ record, turn: this.turns.get(record.name) }));
+    const completed = new Set(selections.filter(({ turn }) => !turn).map(({ record }) => record.name));
+    const reportProgress = () => onProgress?.({
+      selected: selections.map(({ record }) => record.name),
+      completed: selections.map(({ record }) => record.name).filter((name) => completed.has(name)),
+      waiting: selections.map(({ record }) => record.name).filter((name) => !completed.has(name)),
+    });
     for (const selection of selections) {
       if (selection.turn) selection.turn.claimed = true;
     }
+    this.callbacks.changed?.();
+    reportProgress();
 
     try {
-      const results: OwnedAgentRecord[] = [];
-      for (const { record, turn } of selections) {
-        results.push(cloneRecord(turn ? await waitWithSignal(turn.promise, signal) : record));
-      }
-      return results;
+      return await Promise.all(selections.map(async ({ record, turn }) => {
+        const result = cloneRecord(turn ? await waitWithSignal(turn.promise, signal) : record);
+        completed.add(record.name);
+        reportProgress();
+        return result;
+      }));
     } catch (error) {
       for (const { record, turn } of selections) {
         if (turn && this.turns.get(record.name) === turn) turn.claimed = false;
       }
+      this.callbacks.changed?.();
       throw error;
     }
   }

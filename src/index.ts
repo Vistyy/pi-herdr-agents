@@ -12,7 +12,7 @@ import {
 import { Type } from "typebox";
 import { getConfigDirectory, loadConfig } from "./config.js";
 import { HerdrClient } from "./herdr.js";
-import { AgentManager } from "./manager.js";
+import { AgentManager, type WaitProgress } from "./manager.js";
 import { discoverInheritedResources, resolveRuntimeSettings } from "./resources.js";
 import { OWNED_AGENT_ENTRY, type ExtensionConfig, type OwnedAgentRecord, type OwnedAgentSnapshot } from "./types.js";
 
@@ -63,6 +63,10 @@ export default async function piHerdrAgents(pi: ExtensionAPI): Promise<void> {
         persist(records) {
           const snapshot: OwnedAgentSnapshot = { version: 1, parentSessionId, records };
           pi.appendEntry(OWNED_AGENT_ENTRY, snapshot);
+          updateAgentWidget(ctx, records, manager?.getClaimedNames() ?? []);
+        },
+        changed() {
+          updateAgentWidget(ctx, manager?.getRecords() ?? [], manager?.getClaimedNames() ?? []);
         },
         notify(record) {
           pi.sendMessage(
@@ -104,11 +108,13 @@ export default async function piHerdrAgents(pi: ExtensionAPI): Promise<void> {
     await manager.restore(readSnapshot(ctx, parentSessionId));
   });
 
-  pi.on("session_shutdown", async (event) => {
-    if (!manager) return;
-    if (event.reason === "reload") manager.suspend();
-    else await manager.shutdown();
-    manager = undefined;
+  pi.on("session_shutdown", async (event, ctx) => {
+    if (manager) {
+      if (event.reason === "reload") manager.suspend();
+      else await manager.shutdown();
+      manager = undefined;
+    }
+    if (ctx.mode === "tui") ctx.ui.setWidget("pi-herdr-agents", undefined);
   });
 
   if (config.identities.length === 0) return;
@@ -174,8 +180,13 @@ function registerTools(pi: ExtensionAPI, config: ExtensionConfig, getManager: ()
     parameters: Type.Object({
       names: Type.Optional(Type.Array(Type.String(), { uniqueItems: true, description: "Agent names. Omit to wait for all working owned agents." })),
     }),
-    async execute(_id, params, signal) {
-      const records = await getManager().wait(params.names, signal);
+    async execute(_id, params, signal, onUpdate) {
+      const records = await getManager().wait(params.names, signal, (progress) => {
+        onUpdate?.({
+          content: [{ type: "text", text: formatWaitProgress(progress) }],
+          details: { progress },
+        });
+      });
       return toolResult(formatResults(records), records);
     },
   });
@@ -249,6 +260,28 @@ function formatList(records: OwnedAgentRecord[]): string {
 function formatResults(records: OwnedAgentRecord[]): string {
   if (records.length === 0) return "No working owned agents to wait for.";
   return records.map((record) => `## ${record.name} (${record.status})\n\n${record.lastResult ?? record.lastError ?? "(no result)"}`).join("\n\n");
+}
+
+function formatWaitProgress(progress: WaitProgress): string {
+  const completed = progress.completed.length > 0 ? progress.completed.join(", ") : "none";
+  const waiting = progress.waiting.length > 0 ? progress.waiting.join(", ") : "none";
+  return `Selected: ${progress.selected.join(", ")}\nCompleted: ${completed}\nStill waiting: ${waiting}`;
+}
+
+function updateAgentWidget(ctx: ExtensionContext, records: OwnedAgentRecord[], claimedNames: string[]): void {
+  if (ctx.mode !== "tui") return;
+  const claimed = new Set(claimedNames);
+  const visible = records.filter((record) =>
+    record.status === "starting" || Boolean(record.paneId) || claimed.has(record.name),
+  );
+  if (visible.length === 0) {
+    ctx.ui.setWidget("pi-herdr-agents", undefined);
+    return;
+  }
+  ctx.ui.setWidget("pi-herdr-agents", [
+    "Owned agents",
+    ...visible.map((record) => `- ${record.name}: ${record.status}${claimed.has(record.name) ? " (wait_agents)" : ""}`),
+  ]);
 }
 
 function formatNotification(record: OwnedAgentRecord): string {

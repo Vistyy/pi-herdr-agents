@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import type { HerdrClient } from "../src/herdr.js";
-import { AgentManager } from "../src/manager.js";
+import { AgentManager, type WaitProgress } from "../src/manager.js";
 import type { ExtensionConfig, HerdrAgent, OwnedAgentRecord } from "../src/types.js";
 
 function deferred<T>() {
@@ -113,7 +113,9 @@ test("a claimed task result is returned, not automatically announced, and its ta
   );
 
   await manager.start({ name: "review", identityName: "reviewer", task: "Review it.", keepOpen: false, cwd: "/repo" });
-  const waiting = manager.wait(["review"]);
+  const progress: WaitProgress[] = [];
+  const waiting = manager.wait(["review"], undefined, (update) => progress.push(update));
+  assert.deepEqual(progress, [{ selected: ["review"], completed: [], waiting: ["review"] }]);
   fake.settled.resolve({
     pane_id: "w1:p2",
     tab_id: "w1:t2",
@@ -124,6 +126,7 @@ test("a claimed task result is returned, not automatically announced, and its ta
 
   const [result] = await waiting;
   assert.equal(result.lastResult, "Finished review.");
+  assert.deepEqual(progress.at(-1), { selected: ["review"], completed: ["review"], waiting: [] });
   assert.equal(notifications.length, 0);
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(fake.closed, ["w1:t2"]);
