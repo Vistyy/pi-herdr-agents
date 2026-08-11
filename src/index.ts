@@ -13,6 +13,7 @@ import { Type } from "typebox";
 import { getConfigDirectory, loadConfig } from "./config.js";
 import { HerdrClient } from "./herdr.js";
 import { AgentManager, type WaitProgress } from "./manager.js";
+import { DeferredNotifications } from "./notifications.js";
 import { discoverInheritedResources, resolveRuntimeSettings } from "./resources.js";
 import { OWNED_AGENT_ENTRY, type ExtensionConfig, type OwnedAgentRecord, type OwnedAgentSnapshot } from "./types.js";
 
@@ -40,6 +41,7 @@ export default async function piHerdrAgents(pi: ExtensionAPI): Promise<void> {
   const herdrSkillRoot = join(agentDir, "skills", "herdr");
 
   let manager: AgentManager | undefined;
+  let notifications: DeferredNotifications<OwnedAgentRecord> | undefined;
   pi.on("session_start", async (_event, ctx) => {
     for (const warning of config.warnings) ctx.ui.notify(warning, "warning");
     if (config.identities.length === 0) return;
@@ -48,6 +50,20 @@ export default async function piHerdrAgents(pi: ExtensionAPI): Promise<void> {
     const parentToken = createHash("sha256").update(parentSessionId).digest("hex").slice(0, 8);
     const herdr = new HerdrClient((command, args, options) => pi.exec(command, args, options));
     const inheritedResources = new Map<string, ReturnType<typeof discoverInheritedResources>>();
+    notifications = new DeferredNotifications<OwnedAgentRecord>(
+      () => ctx.isIdle(),
+      (record) => {
+        pi.sendMessage(
+          {
+            customType: OWNED_AGENT_ENTRY,
+            content: formatNotification(record),
+            display: true,
+            details: record,
+          },
+          { deliverAs: "followUp", triggerTurn: true },
+        );
+      },
+    );
     manager = new AgentManager(
       herdr,
       config,
@@ -69,15 +85,13 @@ export default async function piHerdrAgents(pi: ExtensionAPI): Promise<void> {
           updateAgentWidget(ctx, manager?.getRecords() ?? [], manager?.getClaimedNames() ?? []);
         },
         notify(record) {
-          pi.sendMessage(
-            {
-              customType: OWNED_AGENT_ENTRY,
-              content: formatNotification(record),
-              display: true,
-              details: record,
-            },
-            { deliverAs: "followUp", triggerTurn: true },
-          );
+          notifications?.complete(notificationKey(record), record);
+        },
+        claimNotification(record) {
+          notifications?.claim(notificationKey(record));
+        },
+        releaseNotification(record) {
+          notifications?.complete(notificationKey(record), record);
         },
         async resolveRuntime(identity, cwd) {
           let inherited = inheritedResources.get(cwd);
@@ -108,7 +122,12 @@ export default async function piHerdrAgents(pi: ExtensionAPI): Promise<void> {
     await manager.restore(readSnapshot(ctx, parentSessionId));
   });
 
+  pi.on("agent_settled", () => notifications?.flush());
+
   pi.on("session_shutdown", async (event, ctx) => {
+    if (event.reason === "reload") notifications?.flush();
+    notifications?.clear();
+    notifications = undefined;
     if (manager) {
       if (event.reason === "reload") manager.suspend();
       else await manager.shutdown();
@@ -282,6 +301,10 @@ function updateAgentWidget(ctx: ExtensionContext, records: OwnedAgentRecord[], c
     "Owned agents",
     ...visible.map((record) => `- ${record.name}: ${record.status}${claimed.has(record.name) ? " (wait_agents)" : ""}`),
   ]);
+}
+
+function notificationKey(record: OwnedAgentRecord): string {
+  return `${record.name}:${record.assignment}`;
 }
 
 function formatNotification(record: OwnedAgentRecord): string {

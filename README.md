@@ -181,7 +181,9 @@ Set `keep_open: true` when starting an agent to keep it as a persistent collabor
 Sending a message to a closed agent resumes its Pi session in a new tab.
 
 Completion sends a follow-up message to the parent and triggers a parent turn.
-Calling `wait_agents` before completion claims the selected results and suppresses that automatic notification.
+If the parent is active when an agent completes, the extension defers the follow-up until that parent turn settles.
+Calling `wait_agents` claims selected results, including deferred completions from the current parent turn, and suppresses their automatic notifications.
+Canceling `wait_agents` does not stop its agents or lose their later completion notifications.
 While `wait_agents` runs, its tool row reports the selected agents, completed agents, and agents that are still pending.
 In TUI mode, a widget above the editor shows each live owned agent's status and marks agents claimed by `wait_agents`.
 

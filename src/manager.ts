@@ -23,6 +23,8 @@ export interface WaitProgress {
 export interface ManagerCallbacks {
   persist(records: OwnedAgentRecord[]): void;
   notify(record: OwnedAgentRecord): void;
+  claimNotification?(record: OwnedAgentRecord): void;
+  releaseNotification?(record: OwnedAgentRecord): void;
   changed?(): void;
   resolveRuntime?(identity: AgentIdentity, cwd: string): Promise<RuntimeSettings>;
 }
@@ -213,6 +215,7 @@ export class AgentManager {
       waiting: selections.map(({ record }) => record.name).filter((name) => !completed.has(name)),
     });
     for (const selection of selections) {
+      this.callbacks.claimNotification?.(cloneRecord(selection.record));
       if (selection.turn) selection.turn.claimed = true;
     }
     this.callbacks.changed?.();
@@ -227,7 +230,13 @@ export class AgentManager {
       }));
     } catch (error) {
       for (const { record, turn } of selections) {
-        if (turn && this.turns.get(record.name) === turn) turn.claimed = false;
+        if (!turn) {
+          this.callbacks.releaseNotification?.(cloneRecord(record));
+        } else if (this.turns.get(record.name) === turn) {
+          turn.claimed = false;
+        } else if (record.completedAssignment === turn.assignment && record.notifiedAssignment !== turn.assignment) {
+          this.persistAndNotify(record, false);
+        }
       }
       this.callbacks.changed?.();
       throw error;

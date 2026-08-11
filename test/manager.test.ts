@@ -134,6 +134,74 @@ test("a claimed task result is returned, not automatically announced, and its ta
   assert.ok(snapshots.length > 0);
 });
 
+test("a wait claims a completion deferred during the current parent turn", async () => {
+  const fake = new FakeHerdr();
+  fake.sessionFile = await childSessionFile();
+  const pending = new Map<string, OwnedAgentRecord>();
+  const manager = new AgentManager(
+    fake as unknown as HerdrClient,
+    testConfig(),
+    "w1",
+    dirname(fake.sessionFile),
+    "parent",
+    { provider: "test", model: "test/model", thinking: "medium" },
+    {
+      persist() {},
+      notify: (record) => pending.set(`${record.name}:${record.assignment}`, record),
+      claimNotification: (record) => pending.delete(`${record.name}:${record.assignment}`),
+    },
+  );
+
+  await manager.start({ name: "review", identityName: "reviewer", task: "Review it.", keepOpen: true, cwd: "/repo" });
+  fake.settled.resolve({
+    pane_id: "w1:p2",
+    tab_id: "w1:t2",
+    workspace_id: "w1",
+    agent_status: "done",
+    agent_session: { value: fake.activeSessionFile },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(pending.size, 1);
+
+  const [result] = await manager.wait(["review"]);
+
+  assert.equal(result.lastResult, "Finished review.");
+  assert.equal(pending.size, 0);
+});
+
+test("a cancelled wait restores automatic notification for later completion", async () => {
+  const fake = new FakeHerdr();
+  fake.sessionFile = await childSessionFile();
+  const notifications: OwnedAgentRecord[] = [];
+  const manager = new AgentManager(
+    fake as unknown as HerdrClient,
+    testConfig(),
+    "w1",
+    dirname(fake.sessionFile),
+    "parent",
+    { provider: "test", model: "test/model", thinking: "medium" },
+    { persist() {}, notify: (record) => notifications.push(record) },
+  );
+
+  await manager.start({ name: "review", identityName: "reviewer", task: "Review it.", keepOpen: true, cwd: "/repo" });
+  const controller = new AbortController();
+  const waiting = manager.wait(["review"], controller.signal);
+  controller.abort();
+  await assert.rejects(waiting, /Wait cancelled/);
+
+  fake.settled.resolve({
+    pane_id: "w1:p2",
+    tab_id: "w1:t2",
+    workspace_id: "w1",
+    agent_status: "done",
+    agent_session: { value: fake.activeSessionFile },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(notifications.length, 1);
+  assert.equal(notifications[0].lastResult, "Finished review.");
+});
+
 test("an unclaimed persistent result notifies the parent and keeps its tab", async () => {
   const fake = new FakeHerdr();
   fake.sessionFile = await childSessionFile();
