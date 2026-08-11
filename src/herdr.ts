@@ -191,7 +191,7 @@ function delay(milliseconds: number, signal?: AbortSignal): Promise<void> {
 
 export function buildPiArgs(options: {
   settings: RuntimeSettings;
-  instructions: string;
+  instructions?: string;
   sessionFile: string;
   sessionName: string;
 }): string[] {
@@ -207,7 +207,7 @@ export function buildPiArgs(options: {
   if (settings.provider) args.push("--provider", settings.provider);
   if (settings.model) args.push("--model", settings.model);
   if (settings.thinking) args.push("--thinking", settings.thinking);
-  args.push("--append-system-prompt", options.instructions);
+  if (options.instructions) args.push("--append-system-prompt", options.instructions);
   args.push("--name", options.sessionName);
 
   args.push("--session", options.sessionFile);

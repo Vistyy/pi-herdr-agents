@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { loadConfig, resolveSettings } from "../src/config.js";
+import { loadConfig } from "../src/config.js";
 
 test("loads defaults and valid identities while disabling only invalid identities", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-herdr-config-"));
@@ -27,17 +27,28 @@ Review the assigned concern and report findings.
   assert.deepEqual(config.defaults.tools, ["read"]);
   assert.deepEqual(config.defaults.skills, [join(root, "skills", "review")]);
   assert.deepEqual(config.identities.map((identity) => identity.name), ["reviewer"]);
+  assert.equal(config.identities[0].instructions, "Review the assigned concern and report findings.");
+  assert.deepEqual(config.identities[0].tools, []);
   assert.match(config.warnings[0], /Disabled identity broken\.md/);
+});
 
-  const resolved = resolveSettings(config.identities[0], config.defaults, {
-    provider: "openai-codex",
-    model: "openai-codex/parent",
-    thinking: "high",
-  });
-  assert.equal(resolved.model, "gpt-5.6-sol");
-  assert.equal(resolved.thinking, "high");
-  assert.deepEqual(resolved.tools, []);
-  assert.deepEqual(resolved.skills, [join(root, "skills", "review")]);
+test("accepts a frontmatter-only identity with required descriptive metadata", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-herdr-config-"));
+  await mkdir(join(root, "agents"));
+  await writeFile(join(root, "agents", "fast.md"), `---
+name: fast
+description: Handles small tasks with limited reasoning.
+thinking: low
+skills:
+  - "!session-routing"
+  - "-./skills/local"
+---
+`);
+
+  const config = await loadConfig(root);
+  assert.deepEqual(config.warnings, []);
+  assert.equal(config.identities[0].instructions, undefined);
+  assert.deepEqual(config.identities[0].skills, ["!session-routing", `-${join(root, "agents", "skills", "local")}`]);
 });
 
 test("invalid global defaults disable the complete configuration", async () => {

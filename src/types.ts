@@ -16,7 +16,7 @@ export interface RuntimeSettings {
 export interface AgentIdentity extends RuntimeSettings {
   name: string;
   description: string;
-  instructions: string;
+  instructions?: string;
   sourcePath: string;
 }
 

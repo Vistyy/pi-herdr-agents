@@ -2,7 +2,7 @@
 
 `@vistyy/pi-herdr-agents` gives a Pi session owned, resumable agents in separate tabs of its current Herdr workspace.
 
-An **agent identity** is global configuration that defines when an agent is useful, its runtime settings, its allowed resources, and its role instructions.
+An **agent identity** is global configuration that describes when an agent is useful and can customize its runtime settings, inherited resources, and role instructions.
 
 An **owned agent** is a resumable Pi session created from an agent identity and owned by one parent Pi session.
 
@@ -17,10 +17,10 @@ It does not fall back to unmanaged child processes.
 
 ## Install
 
-Install a published version:
+Install a released version from GitHub:
 
 ```sh
-pi install npm:@vistyy/pi-herdr-agents
+pi install git:github.com/Vistyy/pi-herdr-agents@v0.1.1
 ```
 
 Install a local checkout:
@@ -29,7 +29,7 @@ Install a local checkout:
 pi install /absolute/path/to/pi-herdr-agents
 ```
 
-Run `/reload` after changing configuration.
+Run `/reload` after installation or configuration changes.
 
 ## Configure
 
@@ -56,9 +56,7 @@ When no valid identities exist, it registers no LLM tools.
     "provider": "openai-codex",
     "model": "gpt-5.6-sol",
     "thinking": "medium",
-    "tools": ["read", "bash", "web_search", "web_fetch"],
-    "extensions": ["~/.pi/agent/extensions/web-search"],
-    "skills": ["~/.pi/agent/skills/verification"]
+    "skills": ["!session-routing"]
   }
 }
 ```
@@ -66,49 +64,99 @@ When no valid identities exist, it registers no LLM tools.
 `maxAgents` defaults to `10`.
 An invalid global configuration disables the extension and reports an error.
 
-List settings use replacement semantics.
-An identity list replaces the corresponding global list.
-An empty list permits none.
-If both the identity and global default omit a list, the child receives none of that resource type.
-
 Scalar settings use identity, then global default, then parent-session values.
 The scalar settings are `provider`, `model`, and `thinking`.
 
-Relative extension and skill paths in `config.json` resolve from the configuration directory.
-Relative paths in an identity resolve from that identity file's directory.
-A leading `~/` resolves from the home directory.
-
 ### Agent identity
+
+Each identity is one Markdown file with YAML frontmatter.
+The `name` and `description` fields are required.
+All runtime fields and the Markdown body are optional.
 
 ```md
 ---
 name: reviewer
 description: Reviews a bounded concern when independent analysis can reduce the parent session's context load.
-provider: openai-codex
-model: gpt-5.6-sol
-thinking: medium
-tools:
-  - read
-  - bash
+thinking: high
 skills:
-  - ~/.pi/agent/skills/verification
-extensions: []
+  - verification
+  - "!session-routing"
 ---
-
-Review the assigned concern within its stated scope.
-Return actionable findings and state material uncertainty.
 ```
 
 The `name` must match `[a-z][a-z0-9_-]{0,63}`.
 The `description` tells the parent when and why to invoke the identity.
-The Markdown body is appended to Pi's default coding prompt.
+Write a specific description because the parent uses it to select an identity.
+
+A Markdown body supplies identity-specific instructions:
+
+```md
+---
+name: library-researcher
+description: Researches a bounded decision about an installed library using version-specific evidence and official guidance.
+model: gpt-5.6-luna
+thinking: high
+tools:
+  - read
+  - bash
+  - web_search
+  - web_fetch
+---
+
+Establish the installed library version before making compatibility claims.
+Prefer official documentation and repository evidence.
+```
+
+The body is appended to Pi's default coding prompt.
+A frontmatter-only identity adds no identity prompt.
 
 An invalid identity is disabled without disabling other valid identities.
 The extension reports each invalid identity during session startup.
 
-## Agent behavior
+### Resource inheritance and filters
 
-The extension registers these tools when at least one valid identity exists:
+A child starts from the parent's resources.
+Tools come from the parent's active tool set when the child starts.
+Extensions and skills are resolved through Pi's resource loader with the parent's global configuration, project configuration, working directory, and project trust decision.
+
+Global default filters apply first.
+Identity filters apply to that result second.
+
+Each `tools`, `extensions`, or `skills` field has these semantics:
+
+- An omitted field preserves the inherited set from the previous layer.
+- An empty list selects no resources of that type.
+- Plain glob patterns form an allowlist.
+- `!pattern` excludes all glob matches.
+- `-value` excludes one exact match.
+- `+value` force-includes one exact match from the inherited parent universe, including a resource removed by a global default filter.
+
+Patterns use minimatch glob syntax.
+Tool and skill names can be used directly.
+Extension selectors can match resolved paths, configured source names, file names, or containing directory names.
+
+This identity keeps inherited tools, removes write tools, and selects two inherited skills:
+
+```yaml
+tools:
+  - "!edit"
+  - "!write"
+skills:
+  - verification
+  - codebase-design
+```
+
+This identity removes all inherited skills:
+
+```yaml
+skills: []
+```
+
+Relative extension and skill paths in `config.json` resolve from the configuration directory.
+Relative paths in an identity resolve from that identity file's directory.
+A leading `~/` resolves from the home directory.
+
+The delegation extension, the global `herdr` skill, and these delegation tools are always excluded from children:
 
 - `start_agent`
 - `send_agent`
@@ -116,6 +164,12 @@ The extension registers these tools when at least one valid identity exists:
 - `list_agents`
 - `interrupt_agent`
 - `close_agent`
+
+Filters cannot force-include these resources.
+
+## Agent behavior
+
+The extension registers the six delegation tools above when at least one valid identity exists.
 
 Each owned agent opens in a new tab in the parent session's current Herdr workspace and uses the parent's working directory.
 The extension does not create Git worktrees or prevent writes.
@@ -132,18 +186,14 @@ Calling `wait_agents` before completion claims the selected results and suppress
 Only the same parent Pi session can list or resume its owned agents.
 Forked and unrelated Pi sessions do not adopt them.
 
-## Resource isolation
+## Child Pi environment
 
-Child Pi sessions disable automatic extension, skill, and prompt-template discovery.
-They load only the extensions and skills selected by their identity or global defaults.
-They still load applicable repository `AGENTS.md` and `CLAUDE.md` files.
-The child explicitly selects Pi's default coding prompt, so discovered `SYSTEM.md` files cannot replace it.
+The extension resolves inherited resources before launch and passes explicit tool, extension, and skill lists to the child.
+The child disables automatic extension, skill, and prompt-template discovery so its launch cannot add resources outside those resolved lists.
+It still loads applicable repository `AGENTS.md` and `CLAUDE.md` context files.
+It uses Pi's default coding prompt, with an optional identity body appended to it.
 
-The child cannot load this delegation extension or the global Herdr skill through identity configuration.
-A global default that names either resource disables the extension.
-An identity that names either resource is disabled.
-
-This is resource isolation, not an operating-system sandbox.
+This controls Pi resources, not operating-system access.
 A child with shell access can still start processes permitted by the operating system.
 
 ## Lifecycle
@@ -151,7 +201,7 @@ A child with shell access can still start processes permitted by the operating s
 `/reload` keeps live owned-agent tabs open and reconnects tracking from parent-session entries.
 
 Normal parent exit, `/new`, `/resume`, `/fork`, and `/clone` close live owned-agent tabs.
-Child Pi session files remain available for same-parent resumption.
+Child Pi session files remain available for same-parent resumption under `~/.pi/agent/pi-herdr-agents/sessions/`.
 An active assignment is interrupted when its parent exits or changes sessions.
 
 Hard crashes, `SIGKILL`, Herdr failure, and power loss cannot run graceful cleanup.

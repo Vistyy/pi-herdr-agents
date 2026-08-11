@@ -32,6 +32,13 @@ function resolveResource(value: string, baseDir: string): string {
   return isAbsolute(expanded) ? expanded : resolve(baseDir, expanded);
 }
 
+function resolveSelector(value: string, baseDir: string): string {
+  const prefix = /^[!+-]/.test(value) ? value[0] : "";
+  const operand = prefix ? value.slice(1) : value;
+  const isPath = operand.startsWith("~") || operand.startsWith(".") || isAbsolute(operand);
+  return `${prefix}${isPath ? resolveResource(operand, baseDir) : operand}`;
+}
+
 function readString(value: unknown, field: string): string | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== "string" || value.trim() === "") throw new Error(`${field} must be a non-empty string`);
@@ -46,7 +53,7 @@ function readList(value: unknown, field: string, baseDir?: string): string[] | u
   const entries = value.map((item) => item.trim());
   if (entries.includes("all")) throw new Error(`${field} must use explicit entries; "all" is not supported`);
   if (new Set(entries).size !== entries.length) throw new Error(`${field} must not contain duplicates`);
-  return baseDir ? entries.map((item) => resolveResource(item, baseDir)) : entries;
+  return baseDir ? entries.map((item) => resolveSelector(item, baseDir)) : entries;
 }
 
 function readRuntimeSettings(value: unknown, location: string, baseDir: string): RuntimeSettings {
@@ -94,13 +101,12 @@ async function loadIdentity(path: string): Promise<AgentIdentity> {
     throw new Error("name must match [a-z][a-z0-9_-]{0,63}");
   }
   if (!description) throw new Error("description is required");
-  if (!body) throw new Error("instruction body is required");
 
   const runtimeData = Object.fromEntries(Object.entries(data).filter(([key]) => RUNTIME_KEYS.has(key)));
   return {
     name,
     description,
-    instructions: body,
+    instructions: body || undefined,
     sourcePath: path,
     ...readRuntimeSettings(runtimeData, "frontmatter", dirname(path)),
   };
@@ -155,20 +161,5 @@ export async function loadConfig(configDir = getConfigDirectory()): Promise<Exte
     defaults: readRuntimeSettings(raw.defaults, "defaults", configDir),
     identities,
     warnings,
-  };
-}
-
-export function resolveSettings(
-  identity: AgentIdentity,
-  defaults: RuntimeSettings,
-  parent: Required<Pick<RuntimeSettings, "model" | "thinking">> & Pick<RuntimeSettings, "provider">,
-): RuntimeSettings {
-  return {
-    provider: identity.provider ?? defaults.provider ?? parent.provider,
-    model: identity.model ?? defaults.model ?? parent.model,
-    thinking: identity.thinking ?? defaults.thinking ?? parent.thinking,
-    tools: identity.tools ?? defaults.tools ?? [],
-    extensions: identity.extensions ?? defaults.extensions ?? [],
-    skills: identity.skills ?? defaults.skills ?? [],
   };
 }

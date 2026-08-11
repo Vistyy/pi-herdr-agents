@@ -17,6 +17,7 @@ interface TurnState {
 export interface ManagerCallbacks {
   persist(records: OwnedAgentRecord[]): void;
   notify(record: OwnedAgentRecord): void;
+  resolveRuntime?(identity: AgentIdentity, cwd: string): Promise<RuntimeSettings>;
 }
 
 export class AgentManager {
@@ -108,7 +109,7 @@ export class AgentManager {
       record.paneId = tab.paneId;
       this.persist();
 
-      const settings = resolveRuntime(identity, this.config.defaults, this.parentSettings);
+      const settings = await this.runtimeSettings(identity, options.cwd);
       const instructionsFile = await this.writeInstructions(identity);
       record.sessionFile = join(this.sessionDir, `${randomUUID()}.jsonl`);
       const agent = await this.herdr.startPi(
@@ -306,7 +307,7 @@ export class AgentManager {
         makeHerdrAgentName(this.parentToken, record.name),
         tab.paneId,
         buildPiArgs({
-          settings: resolveRuntime(identity, this.config.defaults, this.parentSettings),
+          settings: await this.runtimeSettings(identity, record.cwd),
           instructions: instructionsFile,
           sessionFile: record.sessionFile,
           sessionName: record.name,
@@ -336,12 +337,18 @@ export class AgentManager {
     }
   }
 
-  private async writeInstructions(identity: AgentIdentity): Promise<string> {
+  private async writeInstructions(identity: AgentIdentity): Promise<string | undefined> {
+    if (!identity.instructions) return undefined;
     const promptDir = join(this.sessionDir, "prompts");
     await mkdir(promptDir, { recursive: true });
     const path = join(promptDir, `${identity.name}.md`);
     await writeFile(path, `${identity.instructions.trim()}\n`, { encoding: "utf8", mode: 0o600 });
     return path;
+  }
+
+  private runtimeSettings(identity: AgentIdentity, cwd: string): Promise<RuntimeSettings> {
+    if (this.callbacks.resolveRuntime) return this.callbacks.resolveRuntime(identity, cwd);
+    return Promise.resolve(resolveRuntime(identity, this.config.defaults, this.parentSettings));
   }
 
   private watch(record: OwnedAgentRecord, baselineSequence?: number, existingTurn?: TurnState): void {

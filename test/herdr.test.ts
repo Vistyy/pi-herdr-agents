@@ -44,6 +44,16 @@ test("buildPiArgs disables discovery and replaces resource lists", () => {
   ]);
 });
 
+test("buildPiArgs omits an identity prompt when the identity has no body", () => {
+  const args = buildPiArgs({
+    settings: { tools: ["read"] },
+    sessionFile: "/session.jsonl",
+    sessionName: "fast",
+  });
+
+  assert.equal(args.includes("--append-system-prompt"), false);
+});
+
 test("buildPiArgs preserves an explicit provider when the model ID contains a slash", () => {
   const args = buildPiArgs({
     settings: { provider: "openrouter", model: "openai/o1", tools: [] },

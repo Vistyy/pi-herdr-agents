@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { dirname, join, sep } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { StringEnum } from "@earendil-works/pi-ai";
 import {
@@ -13,6 +13,7 @@ import { Type } from "typebox";
 import { getConfigDirectory, loadConfig } from "./config.js";
 import { HerdrClient } from "./herdr.js";
 import { AgentManager } from "./manager.js";
+import { discoverInheritedResources, resolveRuntimeSettings } from "./resources.js";
 import { OWNED_AGENT_ENTRY, type ExtensionConfig, type OwnedAgentRecord, type OwnedAgentSnapshot } from "./types.js";
 
 export default async function piHerdrAgents(pi: ExtensionAPI): Promise<void> {
@@ -35,20 +36,8 @@ export default async function piHerdrAgents(pi: ExtensionAPI): Promise<void> {
   }
 
   const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
-  const herdrSkillRoot = join(dirname(configDir), "skills", "herdr");
-  const forbiddenDefault = findForbiddenResource(config.defaults.extensions, packageRoot, "delegation extension")
-    ?? findForbiddenResource(config.defaults.skills, herdrSkillRoot, "Herdr skill");
-  if (forbiddenDefault) {
-    pi.on("session_start", (_event, ctx) => ctx.ui.notify(`Invalid pi-herdr-agents defaults: ${forbiddenDefault}`, "error"));
-    return;
-  }
-  config.identities = config.identities.filter((identity) => {
-    const forbidden = findForbiddenResource(identity.extensions, packageRoot, "delegation extension")
-      ?? findForbiddenResource(identity.skills, herdrSkillRoot, "Herdr skill");
-    if (!forbidden) return true;
-    config.warnings.push(`Disabled identity ${identity.name}: ${forbidden}`);
-    return false;
-  });
+  const agentDir = dirname(configDir);
+  const herdrSkillRoot = join(agentDir, "skills", "herdr");
 
   let manager: AgentManager | undefined;
   pi.on("session_start", async (_event, ctx) => {
@@ -58,6 +47,7 @@ export default async function piHerdrAgents(pi: ExtensionAPI): Promise<void> {
     const parentSessionId = ctx.sessionManager.getSessionId();
     const parentToken = createHash("sha256").update(parentSessionId).digest("hex").slice(0, 8);
     const herdr = new HerdrClient((command, args, options) => pi.exec(command, args, options));
+    const inheritedResources = new Map<string, ReturnType<typeof discoverInheritedResources>>();
     manager = new AgentManager(
       herdr,
       config,
@@ -85,6 +75,30 @@ export default async function piHerdrAgents(pi: ExtensionAPI): Promise<void> {
             { deliverAs: "followUp", triggerTurn: true },
           );
         },
+        async resolveRuntime(identity, cwd) {
+          let inherited = inheritedResources.get(cwd);
+          if (!inherited) {
+            inherited = discoverInheritedResources({
+              cwd,
+              agentDir,
+              projectTrusted: ctx.isProjectTrusted(),
+              packageRoot,
+              herdrSkillRoot,
+            });
+            inheritedResources.set(cwd, inherited);
+          }
+          return resolveRuntimeSettings({
+            identity,
+            defaults: config.defaults,
+            parent: {
+              provider: ctx.model?.provider,
+              model: ctx.model?.id ?? "",
+              thinking: ctx.thinkingLevel ?? "off",
+            },
+            inherited: await inherited,
+            activeTools: pi.getActiveTools(),
+          });
+        },
       },
     );
     await manager.restore(readSnapshot(ctx, parentSessionId));
@@ -102,11 +116,6 @@ export default async function piHerdrAgents(pi: ExtensionAPI): Promise<void> {
     if (!manager) throw new Error("Owned agents are unavailable before the parent session starts.");
     return manager;
   });
-}
-
-function findForbiddenResource(resources: string[] | undefined, root: string, label: string): string | undefined {
-  const match = resources?.find((resource) => resource === root || resource.startsWith(`${root}${sep}`));
-  return match ? `${label} must not be loaded into child agents (${match})` : undefined;
 }
 
 function registerTools(pi: ExtensionAPI, config: ExtensionConfig, getManager: () => AgentManager): void {
