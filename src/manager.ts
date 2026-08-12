@@ -26,7 +26,8 @@ export interface ManagerCallbacks {
   claimNotification?(record: OwnedAgentRecord): void;
   releaseNotification?(record: OwnedAgentRecord): void;
   changed?(): void;
-  resolveRuntime?(identity: AgentIdentity, cwd: string): Promise<RuntimeSettings>;
+  reloadConfig?(): Promise<ExtensionConfig>;
+  resolveRuntime?(identity: AgentIdentity, cwd: string, defaults: RuntimeSettings): Promise<RuntimeSettings>;
 }
 
 export class AgentManager {
@@ -37,7 +38,7 @@ export class AgentManager {
 
   constructor(
     private readonly herdr: HerdrClient,
-    private readonly config: ExtensionConfig,
+    private config: ExtensionConfig,
     private readonly workspaceId: string,
     private readonly sessionDir: string,
     private readonly parentToken: string,
@@ -97,6 +98,7 @@ export class AgentManager {
     cwd: string;
   }, signal?: AbortSignal): Promise<OwnedAgentRecord> {
     this.assertRunning();
+    await this.reloadConfig();
     validateAgentName(options.name);
     if (this.records.has(options.name)) throw new Error(`Agent name already belongs to this parent session: ${options.name}`);
     if (this.liveCount() >= this.config.maxAgents) {
@@ -174,7 +176,10 @@ export class AgentManager {
     this.assertRunning();
     const record = this.requireRecord(name);
     if (!message.trim()) throw new Error("Message must not be empty.");
-    if (record.status === "closed" || !record.paneId) await this.reopen(record, signal);
+    if (record.status === "closed" || !record.paneId) {
+      await this.reloadConfig();
+      await this.reopen(record, signal);
+    }
     if (this.interruptions.has(name)) {
       throw new Error(`Agent ${name} is being interrupted. Wait for the interrupt operation to finish.`);
     }
@@ -384,8 +389,12 @@ export class AgentManager {
   }
 
   private runtimeSettings(identity: AgentIdentity, cwd: string): Promise<RuntimeSettings> {
-    if (this.callbacks.resolveRuntime) return this.callbacks.resolveRuntime(identity, cwd);
+    if (this.callbacks.resolveRuntime) return this.callbacks.resolveRuntime(identity, cwd, this.config.defaults);
     return Promise.resolve(resolveRuntime(identity, this.config.defaults, this.parentSettings));
+  }
+
+  private async reloadConfig(): Promise<void> {
+    if (this.callbacks.reloadConfig) this.config = await this.callbacks.reloadConfig();
   }
 
   private watch(record: OwnedAgentRecord, baselineSequence?: number, existingTurn?: TurnState): void {

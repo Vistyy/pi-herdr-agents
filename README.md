@@ -179,8 +179,10 @@ It prefers the parent session's But Why workflow for repository implementation w
 A normal task agent closes after it reports its result.
 Set `keep_open: true` when starting an agent to keep it as a persistent collaborator.
 Sending a message to a closed agent resumes its Pi session in a new tab.
+The extension reloads `config.json` and the selected identity file before it starts or resumes a child, so edits apply without reloading the parent Pi session.
 
-Completion sends a follow-up message to the parent and triggers a parent turn.
+Completion sends a hidden follow-up message to the parent and triggers a parent turn.
+The full child result remains available to the parent model without rendering the message in the terminal UI.
 If the parent is active when an agent completes, the extension defers the follow-up until that parent turn settles.
 Calling `wait_agents` claims selected results, including deferred completions from the current parent turn, and suppresses their automatic notifications.
 Canceling `wait_agents` does not stop its agents or lose their later completion notifications.

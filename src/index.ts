@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { StringEnum } from "@earendil-works/pi-ai";
 import {
   DEFAULT_MAX_BYTES,
   DEFAULT_MAX_LINES,
@@ -57,7 +56,7 @@ export default async function piHerdrAgents(pi: ExtensionAPI): Promise<void> {
           {
             customType: OWNED_AGENT_ENTRY,
             content: formatNotification(record),
-            display: true,
+            display: false,
             details: record,
           },
           { deliverAs: "followUp", triggerTurn: true },
@@ -93,7 +92,8 @@ export default async function piHerdrAgents(pi: ExtensionAPI): Promise<void> {
         releaseNotification(record) {
           notifications?.complete(notificationKey(record), record);
         },
-        async resolveRuntime(identity, cwd) {
+        reloadConfig: () => loadConfig(configDir),
+        async resolveRuntime(identity, cwd, defaults) {
           let inherited = inheritedResources.get(cwd);
           if (!inherited) {
             inherited = discoverInheritedResources({
@@ -107,7 +107,7 @@ export default async function piHerdrAgents(pi: ExtensionAPI): Promise<void> {
           }
           return resolveRuntimeSettings({
             identity,
-            defaults: config.defaults,
+            defaults,
             parent: {
               provider: ctx.model?.provider,
               model: ctx.model?.id ?? "",
@@ -158,7 +158,7 @@ function registerTools(pi: ExtensionAPI, config: ExtensionConfig, getManager: ()
     ],
     parameters: Type.Object({
       name: Type.String({ description: "Unique task name matching [a-z][a-z0-9_-]{0,28}" }),
-      identity: StringEnum(identityNames as [string, ...string[]], { description: "Configured agent identity" }),
+      identity: Type.String({ description: `Configured agent identity. Available when this session started: ${identityNames.join(", ")}` }),
       task: Type.String({ description: "Concrete assignment and expected result" }),
       keep_open: Type.Optional(Type.Boolean({ description: "Keep the agent tab open after completion. Default: false." })),
     }),

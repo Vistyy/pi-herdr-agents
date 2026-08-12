@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { copyFile, mkdtemp, writeFile } from "node:fs/promises";
+import { copyFile, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -51,6 +51,7 @@ class FakeHerdr {
   reconciliationGate: Promise<void> | undefined;
   gateReconciliation = false;
   agentName = "";
+  startArgs: string[] = [];
 
   async createTab() {
     this.createCalls += 1;
@@ -59,6 +60,7 @@ class FakeHerdr {
   async waitForShell() {}
   async startPi(name?: string, _pane?: string, args?: string[]) {
     if (name) this.agentName = name;
+    this.startArgs = args ?? [];
     const sessionIndex = args?.indexOf("--session") ?? -1;
     if (sessionIndex >= 0) {
       this.activeSessionFile = args![sessionIndex + 1];
@@ -132,6 +134,37 @@ test("a claimed task result is returned, not automatically announced, and its ta
   assert.deepEqual(fake.closed, ["w1:t2"]);
   assert.equal(manager.getRecords()[0].status, "closed");
   assert.ok(snapshots.length > 0);
+});
+
+test("a start reloads the identity before spawning the child", async () => {
+  const fake = new FakeHerdr();
+  fake.sessionFile = await childSessionFile();
+  const refreshed = testConfig();
+  refreshed.identities[0] = {
+    ...refreshed.identities[0],
+    instructions: "Use the updated profile.",
+    model: "updated-model",
+  };
+  const manager = new AgentManager(
+    fake as unknown as HerdrClient,
+    testConfig(),
+    "w1",
+    dirname(fake.sessionFile),
+    "parent",
+    { provider: "test", model: "parent-model", thinking: "medium" },
+    {
+      persist() {},
+      notify() {},
+      async reloadConfig() { return refreshed; },
+    },
+  );
+
+  await manager.start({ name: "review", identityName: "reviewer", task: "Review it.", keepOpen: true, cwd: "/repo" });
+
+  const modelIndex = fake.startArgs.indexOf("--model");
+  assert.equal(fake.startArgs[modelIndex + 1], "updated-model");
+  const instructionsIndex = fake.startArgs.indexOf("--append-system-prompt");
+  assert.equal(await readFile(fake.startArgs[instructionsIndex + 1], "utf8"), "Use the updated profile.\n");
 });
 
 test("a wait claims a completion deferred during the current parent turn", async () => {
