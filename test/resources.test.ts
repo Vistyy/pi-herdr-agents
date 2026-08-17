@@ -69,13 +69,13 @@ test("an empty resource list selects no inherited resources", () => {
 test("delegation tools and skills are unavailable even when force-included", () => {
   const resolved = resolveRuntimeSettings({
     identity: identity({
-      tools: ["+start_agent", "+read"],
+      tools: ["+start_agent", "+collect_agents", "+read"],
       skills: ["+herdr", "+session-routing", "+review"],
     }),
     defaults: { tools: [], skills: [] },
     parent: {},
     inherited,
-    activeTools: ["read", "start_agent", "send_agent", "close_agent"],
+    activeTools: ["read", "start_agent", "send_agent", "collect_agents", "close_agent"],
   });
 
   assert.deepEqual(resolved.tools, ["read"]);

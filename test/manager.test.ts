@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 import type { HerdrClient } from "../src/herdr.js";
 import { AgentManager, type WaitProgress } from "../src/manager.js";
-import type { ExtensionConfig, HerdrAgent, OwnedAgentRecord } from "../src/types.js";
+import type { ExtensionConfig, HerdrAgent, OwnedAgentCollection, OwnedAgentRecord } from "../src/types.js";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -52,6 +52,7 @@ class FakeHerdr {
   gateReconciliation = false;
   agentName = "";
   startArgs: string[] = [];
+  prompts: string[] = [];
 
   async createTab() {
     this.createCalls += 1;
@@ -74,7 +75,8 @@ class FakeHerdr {
       name: this.agentName,
     };
   }
-  async prompt() {
+  async prompt(_paneId?: string, message?: string) {
+    if (message) this.prompts.push(message);
     this.currentStatus = "working";
     return { pane_id: "w1:p2", tab_id: "w1:t2", workspace_id: "w1", agent_status: "idle" as const };
   }
@@ -115,6 +117,8 @@ test("a claimed task result is returned, not automatically announced, and its ta
   );
 
   await manager.start({ name: "review", identityName: "reviewer", task: "Review it.", keepOpen: false, cwd: "/repo" });
+  assert.match(fake.prompts[0], /Lead with the result or recommendation/);
+  assert.match(fake.prompts[0], /Do not force empty sections or a fixed template/);
   const progress: WaitProgress[] = [];
   const waiting = manager.wait(["review"], undefined, (update) => progress.push(update));
   assert.deepEqual(progress, [{ selected: ["review"], completed: [], waiting: ["review"] }]);
@@ -509,4 +513,217 @@ test("parallel starts reserve names and capacity before asynchronous tab creatio
   const duplicate = manager.start({ name: "first", identityName: "reviewer", task: "Duplicate.", keepOpen: true, cwd: "/repo" });
   await assert.rejects(duplicate, /already belongs/);
   assert.equal(fake.createCalls, 1);
+});
+
+class MultiAgentHerdr {
+  readonly turns = new Map<string, ReturnType<typeof deferred<HerdrAgent>>>();
+  readonly failGetOnce = new Set<string>();
+
+  add(paneId: string): void {
+    this.turns.set(paneId, deferred<HerdrAgent>());
+  }
+
+  async getAgent(paneId: string) {
+    if (this.failGetOnce.delete(paneId)) throw new Error("temporary transport failure");
+    return { pane_id: paneId, tab_id: `tab-${paneId}`, workspace_id: "w1", agent_status: "working" as const };
+  }
+
+  async wait(paneId: string) {
+    return this.turns.get(paneId)!.promise;
+  }
+
+  settle(paneId: string, status: "done" | "blocked" = "done"): void {
+    this.turns.get(paneId)!.resolve({
+      pane_id: paneId,
+      tab_id: `tab-${paneId}`,
+      workspace_id: "w1",
+      agent_status: status,
+    });
+  }
+}
+
+function ownedRecord(options: {
+  name: string;
+  status: OwnedAgentRecord["status"];
+  sessionFile?: string;
+  paneId?: string;
+  result?: string;
+}): OwnedAgentRecord {
+  return {
+    name: options.name,
+    identity: "reviewer",
+    keepOpen: true,
+    status: options.status,
+    paneId: options.paneId,
+    tabId: options.paneId ? `tab-${options.paneId}` : undefined,
+    sessionFile: options.sessionFile,
+    cwd: "/repo",
+    assignment: 1,
+    completedAssignment: options.status === "working" ? undefined : 1,
+    lastTask: "Review.",
+    lastResult: options.result,
+    updatedAt: Date.now(),
+  };
+}
+
+function collectionManager(
+  fake: MultiAgentHerdr,
+  callbacks: {
+    persist?(records: OwnedAgentRecord[], collections: OwnedAgentCollection[]): void;
+    notify?(record: OwnedAgentRecord): void;
+    notifyCollection?(collection: OwnedAgentCollection): void;
+    claimNotification?(record: OwnedAgentRecord): void;
+  } = {},
+): AgentManager {
+  return new AgentManager(
+    fake as unknown as HerdrClient,
+    testConfig(),
+    "w1",
+    "/tmp",
+    "parent",
+    { provider: "test", model: "test/model", thinking: "medium" },
+    {
+      persist: callbacks.persist ?? (() => undefined),
+      notify: callbacks.notify ?? (() => undefined),
+      notifyCollection: callbacks.notifyCollection,
+      claimNotification: callbacks.claimNotification,
+    },
+  );
+}
+
+test("collect_agents includes already-settled mixed outcomes and claims individual notifications", async () => {
+  const fake = new MultiAgentHerdr();
+  const claimed: string[] = [];
+  const completed: OwnedAgentCollection[] = [];
+  const manager = collectionManager(fake, {
+    claimNotification: (record) => claimed.push(record.name),
+    notifyCollection: (collection) => completed.push(collection),
+  });
+  const records = [
+    ownedRecord({ name: "ok", status: "idle", result: "Done." }),
+    ownedRecord({ name: "blocked", status: "blocked", result: "Needs input." }),
+    ownedRecord({ name: "failed", status: "failed", result: "Failed." }),
+    ownedRecord({ name: "stopped", status: "interrupted", result: "Interrupted." }),
+  ];
+  await manager.restore(records);
+
+  const collection = manager.collect(records.map((record) => record.name));
+
+  assert.equal(collection.notified, true);
+  assert.deepEqual(claimed, ["ok", "blocked", "failed", "stopped"]);
+  assert.equal(completed.length, 1);
+  assert.deepEqual(completed[0].members.map((member) => member.result?.status), ["idle", "blocked", "failed", "interrupted"]);
+});
+
+test("collect_agents emits one notification for simultaneous completions and suppresses individuals", async () => {
+  const fake = new MultiAgentHerdr();
+  const firstFile = await childSessionFile();
+  const secondFile = await childSessionFile();
+  fake.add("p1");
+  fake.add("p2");
+  const individual: OwnedAgentRecord[] = [];
+  const completed: OwnedAgentCollection[] = [];
+  const manager = collectionManager(fake, {
+    notify: (record) => individual.push(record),
+    notifyCollection: (collection) => completed.push(collection),
+  });
+  await manager.restore([
+    ownedRecord({ name: "first", status: "working", paneId: "p1", sessionFile: firstFile }),
+    ownedRecord({ name: "second", status: "working", paneId: "p2", sessionFile: secondFile }),
+  ]);
+  manager.collect(["first", "second"]);
+
+  fake.settle("p1");
+  fake.settle("p2");
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(individual.length, 0);
+  assert.equal(completed.length, 1);
+  assert.deepEqual(completed[0].members.map((member) => member.result?.lastResult), ["Finished review.", "Finished review."]);
+});
+
+test("a cancelled overlapping wait does not release an assignment from its collection", async () => {
+  const fake = new MultiAgentHerdr();
+  const sessionFile = await childSessionFile();
+  fake.add("p1");
+  const completed: OwnedAgentCollection[] = [];
+  const individual: OwnedAgentRecord[] = [];
+  const manager = collectionManager(fake, {
+    notify: (record) => individual.push(record),
+    notifyCollection: (collection) => completed.push(collection),
+  });
+  await manager.restore([ownedRecord({ name: "review", status: "working", paneId: "p1", sessionFile })]);
+  manager.collect(["review"]);
+  const controller = new AbortController();
+  const waiting = manager.wait(["review"], controller.signal);
+
+  fake.settle("p1");
+  controller.abort();
+  await assert.rejects(waiting, /Wait cancelled/);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(individual.length, 0);
+  assert.equal(completed.length, 1);
+});
+
+test("a transient restore inspection failure does not complete a pending collection", async () => {
+  const fake = new MultiAgentHerdr();
+  const sessionFile = await childSessionFile();
+  fake.add("p1");
+  fake.failGetOnce.add("p1");
+  const completed: OwnedAgentCollection[] = [];
+  const manager = collectionManager(fake, {
+    notifyCollection: (collection) => completed.push(collection),
+  });
+  const collection: OwnedAgentCollection = {
+    id: "c-reload",
+    members: [{ name: "review", assignment: 1 }],
+    createdAt: Date.now(),
+    notified: false,
+  };
+
+  await manager.restore(
+    [ownedRecord({ name: "review", status: "working", paneId: "p1", sessionFile })],
+    [collection],
+  );
+  assert.equal(completed.length, 0);
+  assert.equal(manager.getRecords()[0].status, "working");
+
+  fake.settle("p1");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(completed.length, 1);
+  assert.equal(completed[0].members[0].result?.lastResult, "Finished review.");
+});
+
+test("a pending collection survives manager reload and notifies after settlement", async () => {
+  const firstFake = new MultiAgentHerdr();
+  const sessionFile = await childSessionFile();
+  firstFake.add("p1");
+  let recordsSnapshot: OwnedAgentRecord[] = [];
+  let collectionsSnapshot: OwnedAgentCollection[] = [];
+  const firstManager = collectionManager(firstFake, {
+    persist: (records, collections) => {
+      recordsSnapshot = records;
+      collectionsSnapshot = collections;
+    },
+  });
+  await firstManager.restore([ownedRecord({ name: "review", status: "working", paneId: "p1", sessionFile })]);
+  firstManager.collect(["review"]);
+  firstManager.suspend();
+
+  const secondFake = new MultiAgentHerdr();
+  secondFake.add("p1");
+  const completed: OwnedAgentCollection[] = [];
+  const individual: OwnedAgentRecord[] = [];
+  const secondManager = collectionManager(secondFake, {
+    notify: (record) => individual.push(record),
+    notifyCollection: (collection) => completed.push(collection),
+  });
+  await secondManager.restore(recordsSnapshot, collectionsSnapshot);
+  secondFake.settle("p1");
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(individual.length, 0);
+  assert.equal(completed.length, 1);
+  assert.equal(completed[0].members[0].result?.lastResult, "Finished review.");
 });

@@ -14,7 +14,17 @@ import { HerdrClient } from "./herdr.js";
 import { AgentManager, type WaitProgress } from "./manager.js";
 import { DeferredNotifications } from "./notifications.js";
 import { discoverInheritedResources, resolveRuntimeSettings } from "./resources.js";
-import { OWNED_AGENT_ENTRY, type ExtensionConfig, type OwnedAgentRecord, type OwnedAgentSnapshot } from "./types.js";
+import {
+  OWNED_AGENT_ENTRY,
+  type ExtensionConfig,
+  type OwnedAgentCollection,
+  type OwnedAgentRecord,
+  type OwnedAgentSnapshot,
+} from "./types.js";
+
+type ParentNotification =
+  | { kind: "agent"; record: OwnedAgentRecord }
+  | { kind: "collection"; collection: OwnedAgentCollection };
 
 export default async function piHerdrAgents(pi: ExtensionAPI): Promise<void> {
   if (process.env.HERDR_ENV !== "1" || !process.env.HERDR_WORKSPACE_ID) {
@@ -39,7 +49,7 @@ export default async function piHerdrAgents(pi: ExtensionAPI): Promise<void> {
   const agentDir = dirname(configDir);
 
   let manager: AgentManager | undefined;
-  let notifications: DeferredNotifications<OwnedAgentRecord> | undefined;
+  let notifications: DeferredNotifications<ParentNotification> | undefined;
   pi.on("session_start", async (_event, ctx) => {
     for (const warning of config.warnings) ctx.ui.notify(warning, "warning");
     if (config.identities.length === 0) return;
@@ -48,15 +58,17 @@ export default async function piHerdrAgents(pi: ExtensionAPI): Promise<void> {
     const parentToken = createHash("sha256").update(parentSessionId).digest("hex").slice(0, 8);
     const herdr = new HerdrClient((command, args, options) => pi.exec(command, args, options));
     const inheritedResources = new Map<string, ReturnType<typeof discoverInheritedResources>>();
-    notifications = new DeferredNotifications<OwnedAgentRecord>(
+    notifications = new DeferredNotifications<ParentNotification>(
       () => ctx.isIdle(),
-      (record) => {
+      (notification) => {
         pi.sendMessage(
           {
             customType: OWNED_AGENT_ENTRY,
-            content: formatNotification(record),
+            content: notification.kind === "agent"
+              ? formatNotification(notification.record)
+              : formatCollectionNotification(notification.collection),
             display: false,
-            details: record,
+            details: notification,
           },
           { deliverAs: "followUp", triggerTurn: true },
         );
@@ -74,8 +86,8 @@ export default async function piHerdrAgents(pi: ExtensionAPI): Promise<void> {
         thinking: ctx.thinkingLevel ?? "off",
       },
       {
-        persist(records) {
-          const snapshot: OwnedAgentSnapshot = { version: 1, parentSessionId, records };
+        persist(records, collections) {
+          const snapshot: OwnedAgentSnapshot = { version: 2, parentSessionId, records, collections };
           pi.appendEntry(OWNED_AGENT_ENTRY, snapshot);
           updateAgentWidget(ctx, records, manager?.getClaimedNames() ?? []);
         },
@@ -83,13 +95,16 @@ export default async function piHerdrAgents(pi: ExtensionAPI): Promise<void> {
           updateAgentWidget(ctx, manager?.getRecords() ?? [], manager?.getClaimedNames() ?? []);
         },
         notify(record) {
-          notifications?.complete(notificationKey(record), record);
+          notifications?.complete(notificationKey(record), { kind: "agent", record });
+        },
+        notifyCollection(collection) {
+          notifications?.complete(`collection:${collection.id}`, { kind: "collection", collection });
         },
         claimNotification(record) {
           notifications?.claim(notificationKey(record));
         },
         releaseNotification(record) {
-          notifications?.complete(notificationKey(record), record);
+          notifications?.complete(notificationKey(record), { kind: "agent", record });
         },
         reloadConfig: () => loadConfig(configDir),
         async resolveRuntime(identity, cwd, defaults) {
@@ -117,7 +132,8 @@ export default async function piHerdrAgents(pi: ExtensionAPI): Promise<void> {
         },
       },
     );
-    await manager.restore(readSnapshot(ctx, parentSessionId));
+    const snapshot = readSnapshot(ctx, parentSessionId);
+    await manager.restore(snapshot.records, snapshot.collections);
   });
 
   pi.on("agent_settled", () => notifications?.flush());
@@ -197,7 +213,11 @@ function registerTools(pi: ExtensionAPI, config: ExtensionConfig, getManager: ()
     label: "Wait for Agents",
     description: "Wait for selected owned agents to settle and return their latest results. Waiting claims those results and suppresses their automatic parent notification.",
     promptSnippet: "Wait for owned agents and claim their results",
-    promptGuidelines: ["Use wait_agents only when the next action depends on the selected agents; otherwise continue useful work."],
+    promptGuidelines: [
+      "Use wait_agents only when the next action in this turn depends on the selected agents.",
+      "Do not wait for independent work. Continue useful work or respond to the user instead.",
+      "Pass explicit names when waiting for a dependency. Use collect_agents for a nonblocking grouped synthesis point.",
+    ],
     parameters: Type.Object({
       names: Type.Optional(Type.Array(Type.String(), { uniqueItems: true, description: "Agent names. Omit to wait for all working owned agents." })),
     }),
@@ -217,6 +237,32 @@ function registerTools(pi: ExtensionAPI, config: ExtensionConfig, getManager: ()
         return inlineListComponent("", formatWaitItems(details.progress));
       }
       return singleLineComponent("Done");
+    },
+  });
+
+  pi.registerTool({
+    name: "collect_agents",
+    label: "Collect Agents",
+    description: "Register a nonblocking barrier for fixed current assignments. Returns immediately, suppresses their individual notifications, and sends one parent follow-up after every named assignment settles.",
+    promptSnippet: "Collect owned agent results later without blocking this turn",
+    promptGuidelines: [
+      "Use collect_agents when later synthesis needs a fixed group of results but useful independent work remains now.",
+      "After registering a collection, continue useful work or respond to the user. Do not call wait_agents for the same assignments.",
+    ],
+    parameters: Type.Object({
+      names: Type.Array(Type.String(), {
+        minItems: 1,
+        uniqueItems: true,
+        description: "Fixed agent names whose current assignments form the collection.",
+      }),
+    }),
+    async execute(_id, params) {
+      const collection = getManager().collect(params.names);
+      const assignments = collection.members.map((member) => `${member.name}#${member.assignment}`).join(", ");
+      return {
+        content: [{ type: "text" as const, text: `Registered ${collection.id} for ${assignments}. The parent will be notified after all assignments settle.` }],
+        details: { collection },
+      };
     },
   });
 
@@ -257,17 +303,19 @@ function registerTools(pi: ExtensionAPI, config: ExtensionConfig, getManager: ()
   });
 }
 
-function readSnapshot(ctx: ExtensionContext, parentSessionId: string): OwnedAgentRecord[] {
+function readSnapshot(ctx: ExtensionContext, parentSessionId: string): { records: OwnedAgentRecord[]; collections: OwnedAgentCollection[] } {
   const branch = ctx.sessionManager.getBranch();
   for (let index = branch.length - 1; index >= 0; index -= 1) {
     const entry = branch[index];
     if (entry.type !== "custom" || entry.customType !== OWNED_AGENT_ENTRY) continue;
     const data = entry.data as Partial<OwnedAgentSnapshot> | undefined;
-    if (data?.version === 1 && data.parentSessionId === parentSessionId && Array.isArray(data.records)) {
-      return data.records;
+    if (data?.parentSessionId !== parentSessionId || !Array.isArray(data.records)) continue;
+    if (data.version === 2 && Array.isArray(data.collections)) {
+      return { records: data.records, collections: data.collections };
     }
+    if (data.version === 1) return { records: data.records, collections: [] };
   }
-  return [];
+  return { records: [], collections: [] };
 }
 
 function toolResult(text: string, records: OwnedAgentRecord[]) {
@@ -312,7 +360,7 @@ function updateAgentWidget(ctx: ExtensionContext, records: OwnedAgentRecord[], c
     return;
   }
   const items = visible.map((record) =>
-    `${record.name} [${record.status}${claimed.has(record.name) ? "/wait" : ""}]`,
+    `${record.name} [${record.status}${claimed.has(record.name) ? "/claimed" : ""}]`,
   );
   ctx.ui.setWidget("pi-herdr-agents", () => ({
     render(width) {
@@ -358,4 +406,13 @@ function notificationKey(record: OwnedAgentRecord): string {
 
 function formatNotification(record: OwnedAgentRecord): string {
   return `Owned agent ${record.name} settled with status ${record.status}.\n\n${record.lastResult ?? record.lastError ?? "(no result)"}`;
+}
+
+function formatCollectionNotification(collection: OwnedAgentCollection): string {
+  const records = collection.members.flatMap((member) => member.result ? [member.result] : []);
+  const text = `Owned agent collection ${collection.id} settled.\n\n${formatResults(records)}`;
+  const truncated = truncateHead(text, { maxBytes: DEFAULT_MAX_BYTES, maxLines: DEFAULT_MAX_LINES });
+  return truncated.truncated
+    ? `${truncated.content}\n\n[Collection output truncated. Full individual results remain in the child Pi session files.]`
+    : truncated.content;
 }

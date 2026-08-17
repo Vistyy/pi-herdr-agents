@@ -10,6 +10,7 @@ const DELEGATION_TOOLS = new Set([
   "start_agent",
   "send_agent",
   "wait_agents",
+  "collect_agents",
   "list_agents",
   "interrupt_agent",
   "close_agent",

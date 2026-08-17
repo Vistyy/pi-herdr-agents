@@ -2,13 +2,13 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, truncateHead } from "@earendil-works/pi-coding-agent";
-import type { AgentIdentity, ExtensionConfig, OwnedAgentRecord, RuntimeSettings } from "./types.js";
+import type { AgentIdentity, ExtensionConfig, OwnedAgentCollection, OwnedAgentRecord, RuntimeSettings } from "./types.js";
 import { buildPiArgs, HerdrClient } from "./herdr.js";
 import { readLatestAssistantResult } from "./session-result.js";
 
 interface TurnState {
   assignment: number;
-  claimed: boolean;
+  claims: Set<string>;
   controller: AbortController;
   promise: Promise<OwnedAgentRecord>;
   resolve: (record: OwnedAgentRecord) => void;
@@ -21,8 +21,9 @@ export interface WaitProgress {
 }
 
 export interface ManagerCallbacks {
-  persist(records: OwnedAgentRecord[]): void;
+  persist(records: OwnedAgentRecord[], collections: OwnedAgentCollection[]): void;
   notify(record: OwnedAgentRecord): void;
+  notifyCollection?(collection: OwnedAgentCollection): void;
   claimNotification?(record: OwnedAgentRecord): void;
   releaseNotification?(record: OwnedAgentRecord): void;
   changed?(): void;
@@ -33,6 +34,7 @@ export interface ManagerCallbacks {
 export class AgentManager {
   private readonly records = new Map<string, OwnedAgentRecord>();
   private readonly turns = new Map<string, TurnState>();
+  private readonly collections = new Map<string, OwnedAgentCollection>();
   private readonly interruptions = new Set<string>();
   private stopped = false;
 
@@ -50,14 +52,19 @@ export class AgentManager {
     return [...this.records.values()].sort((left, right) => left.updatedAt - right.updatedAt).map(cloneRecord);
   }
 
+  getCollections(): OwnedAgentCollection[] {
+    return [...this.collections.values()].map(cloneCollection);
+  }
+
   getClaimedNames(): string[] {
     return [...this.turns.entries()]
-      .filter(([, turn]) => turn.claimed)
+      .filter(([, turn]) => turn.claims.size > 0)
       .map(([name]) => name)
       .sort();
   }
 
-  async restore(records: OwnedAgentRecord[]): Promise<void> {
+  async restore(records: OwnedAgentRecord[], collections: OwnedAgentCollection[] = []): Promise<void> {
+    for (const collection of collections) this.collections.set(collection.id, cloneCollection(collection));
     for (const record of records) this.records.set(record.name, cloneRecord(record));
     for (const record of this.records.values()) {
       if (!record.paneId || record.status === "closed") continue;
@@ -66,7 +73,12 @@ export class AgentManager {
         if (record.sessionFile && agent.agent_session?.value && agent.agent_session.value !== record.sessionFile) {
           record.status = "failed";
           record.lastError = "The recorded pane now hosts a different Pi session.";
+          record.lastResult = record.lastError;
+          record.completedAssignment = record.assignment;
+          record.paneId = undefined;
+          record.tabId = undefined;
           record.updatedAt = Date.now();
+          this.finishSettledRecord(record);
           continue;
         }
         record.tabId = agent.tab_id;
@@ -80,13 +92,21 @@ export class AgentManager {
         } else {
           record.status = "idle";
         }
-      } catch {
-        record.status = "closed";
-        record.paneId = undefined;
-        record.tabId = undefined;
-        record.updatedAt = Date.now();
+      } catch (error) {
+        if (this.isPendingCollection(record.name, record.assignment)) {
+          record.status = "working";
+          record.lastError = `Could not inspect the collected assignment during restore: ${(error as Error).message}`;
+          record.updatedAt = Date.now();
+          this.watch(record);
+        } else {
+          record.status = "closed";
+          record.paneId = undefined;
+          record.tabId = undefined;
+          record.updatedAt = Date.now();
+        }
       }
     }
+    this.completeCollections();
     this.persist();
   }
 
@@ -176,6 +196,7 @@ export class AgentManager {
     this.assertRunning();
     const record = this.requireRecord(name);
     if (!message.trim()) throw new Error("Message must not be empty.");
+    if (record.status === "failed" && record.paneId) await this.reconcileFailedRecord(record, signal);
     if (record.status === "closed" || !record.paneId) {
       await this.reloadConfig();
       await this.reopen(record, signal);
@@ -206,6 +227,44 @@ export class AgentManager {
     return cloneRecord(record);
   }
 
+  collect(names: string[]): OwnedAgentCollection {
+    this.assertRunning();
+    if (names.length === 0) throw new Error("At least one agent name is required.");
+    if (new Set(names).size !== names.length) throw new Error("Agent names must be unique.");
+
+    const records = names.map((name) => this.requireRecord(name));
+    for (const record of records) {
+      const isSettled = record.completedAssignment === record.assignment;
+      const turn = this.turns.get(record.name);
+      if (!isSettled && (!turn || turn.assignment !== record.assignment)) {
+        throw new Error(`Owned agent ${record.name} has no active or completed current assignment to collect.`);
+      }
+      if (this.isPendingCollection(record.name, record.assignment)) {
+        throw new Error(`Assignment ${record.assignment} for owned agent ${record.name} is already in a pending collection.`);
+      }
+    }
+
+    const collection: OwnedAgentCollection = {
+      id: `c-${randomUUID().slice(0, 8)}`,
+      members: records.map((record) => ({
+        name: record.name,
+        assignment: record.assignment,
+        result: record.completedAssignment === record.assignment ? cloneRecord(record) : undefined,
+      })),
+      createdAt: Date.now(),
+      notified: false,
+    };
+    this.collections.set(collection.id, collection);
+    for (const record of records) {
+      this.callbacks.claimNotification?.(cloneRecord(record));
+      this.turns.get(record.name)?.claims.add(collectionClaim(collection.id));
+    }
+    this.persist();
+    this.completeCollections();
+    this.callbacks.changed?.();
+    return cloneCollection(collection);
+  }
+
   async wait(
     names?: string[],
     signal?: AbortSignal,
@@ -219,9 +278,10 @@ export class AgentManager {
       completed: selections.map(({ record }) => record.name).filter((name) => completed.has(name)),
       waiting: selections.map(({ record }) => record.name).filter((name) => !completed.has(name)),
     });
+    const claim = `wait:${randomUUID()}`;
     for (const selection of selections) {
       this.callbacks.claimNotification?.(cloneRecord(selection.record));
-      if (selection.turn) selection.turn.claimed = true;
+      if (selection.turn) selection.turn.claims.add(claim);
     }
     this.callbacks.changed?.();
     reportProgress();
@@ -236,10 +296,10 @@ export class AgentManager {
     } catch (error) {
       for (const { record, turn } of selections) {
         if (!turn) {
-          this.callbacks.releaseNotification?.(cloneRecord(record));
+          if (!this.isCollected(record.name, record.assignment)) this.callbacks.releaseNotification?.(cloneRecord(record));
         } else if (this.turns.get(record.name) === turn) {
-          turn.claimed = false;
-        } else if (record.completedAssignment === turn.assignment && record.notifiedAssignment !== turn.assignment) {
+          turn.claims.delete(claim);
+        } else if (record.completedAssignment === turn.assignment && record.notifiedAssignment !== turn.assignment && !this.isCollected(record.name, turn.assignment)) {
           this.persistAndNotify(record, false);
         }
       }
@@ -277,7 +337,9 @@ export class AgentManager {
         record.completedAssignment = assignment;
         record.notifiedAssignment = assignment;
         record.updatedAt = Date.now();
+        this.captureCollectionResults(record);
         this.persist();
+        this.completeCollections();
         turn?.resolve(cloneRecord(record));
         return cloneRecord(record);
       } catch (error) {
@@ -324,6 +386,35 @@ export class AgentManager {
       if (!record.paneId || record.status === "closed") return;
       await this.closeRecord(record, record.status === "working" ? "interrupted" : "closed").catch(() => undefined);
     }));
+  }
+
+  private async reconcileFailedRecord(record: OwnedAgentRecord, signal?: AbortSignal): Promise<void> {
+    let agent;
+    try {
+      agent = await this.herdr.getAgent(record.paneId!, signal);
+    } catch (error) {
+      throw new Error(`Could not verify failed owned agent ${record.name}; retry later: ${(error as Error).message}`);
+    }
+    if (record.sessionFile && agent.agent_session?.value && agent.agent_session.value !== record.sessionFile) {
+      throw new Error(`Refused to reuse pane ${record.paneId} because it hosts a different Pi session.`);
+    }
+    record.tabId = agent.tab_id;
+    if (agent.agent_status === "working" || agent.agent_status === "unknown") {
+      record.status = "working";
+      record.completedAssignment = undefined;
+      record.lastResult = undefined;
+      record.updatedAt = Date.now();
+      this.persist();
+      this.watch(record);
+      throw new Error(`Owned agent ${record.name} is still working on assignment ${record.assignment}.`);
+    }
+    if (agent.agent_status === "blocked") {
+      await this.settleBlocked(record);
+      throw new Error(`Owned agent ${record.name} is blocked and needs input.`);
+    }
+    record.status = "idle";
+    record.updatedAt = Date.now();
+    this.persist();
   }
 
   private async reopen(record: OwnedAgentRecord, signal?: AbortSignal): Promise<void> {
@@ -407,7 +498,13 @@ export class AgentManager {
     } else {
       let resolve!: (record: OwnedAgentRecord) => void;
       const promise = new Promise<OwnedAgentRecord>((done) => { resolve = done; });
-      turn = { assignment: record.assignment, claimed: false, controller, promise, resolve };
+      turn = {
+        assignment: record.assignment,
+        claims: new Set(this.collectionClaims(record.name, record.assignment)),
+        controller,
+        promise,
+        resolve,
+      };
     }
     this.turns.set(record.name, turn);
 
@@ -422,6 +519,8 @@ export class AgentManager {
       if (controller.signal.aborted || this.stopped) return;
       record.status = "failed";
       record.lastError = (error as Error).message;
+      record.lastResult = `Agent ${record.name} failed: ${record.lastError}`;
+      record.completedAssignment = record.assignment;
       record.updatedAt = Date.now();
       this.finishTurn(record, turn);
     });
@@ -433,7 +532,7 @@ export class AgentManager {
     record.lastResult = `Agent ${record.name} is blocked and needs input.`;
     record.updatedAt = Date.now();
     if (turn) this.finishTurn(record, turn);
-    else this.persistAndNotify(record, false);
+    else this.finishSettledRecord(record);
   }
 
   private async settleCompleted(record: OwnedAgentRecord, turn = this.turns.get(record.name)): Promise<void> {
@@ -451,7 +550,7 @@ export class AgentManager {
     record.completedAssignment = record.assignment;
     record.updatedAt = Date.now();
     if (turn) this.finishTurn(record, turn);
-    else this.persistAndNotify(record, false);
+    else this.finishSettledRecord(record);
 
     if (!record.keepOpen) {
       await this.closeRecord(record, record.status === "failed" ? "failed" : "closed");
@@ -461,8 +560,53 @@ export class AgentManager {
   private finishTurn(record: OwnedAgentRecord, turn: TurnState): void {
     if (this.turns.get(record.name) !== turn) return;
     this.turns.delete(record.name);
-    this.persistAndNotify(record, turn.claimed);
+    this.captureCollectionResults(record);
+    this.persistAndNotify(record, turn.claims.size > 0);
+    this.completeCollections();
     turn.resolve(cloneRecord(record));
+  }
+
+  private finishSettledRecord(record: OwnedAgentRecord): void {
+    this.captureCollectionResults(record);
+    this.persistAndNotify(record, this.isCollected(record.name, record.assignment));
+    this.completeCollections();
+  }
+
+  private captureCollectionResults(record: OwnedAgentRecord): void {
+    if (record.completedAssignment !== record.assignment) return;
+    for (const collection of this.collections.values()) {
+      if (collection.notified) continue;
+      const member = collection.members.find((candidate) => candidate.name === record.name && candidate.assignment === record.assignment);
+      if (member && !member.result) member.result = cloneRecord(record);
+    }
+  }
+
+  private completeCollections(): void {
+    for (const collection of this.collections.values()) {
+      if (collection.notified || collection.members.some((member) => !member.result)) continue;
+      collection.notified = true;
+      const notification = cloneCollection(collection);
+      for (const member of collection.members) member.result = undefined;
+      this.persist();
+      this.callbacks.notifyCollection?.(notification);
+    }
+  }
+
+  private isCollected(name: string, assignment: number): boolean {
+    return [...this.collections.values()].some((collection) =>
+      collection.members.some((member) => member.name === name && member.assignment === assignment));
+  }
+
+  private isPendingCollection(name: string, assignment: number): boolean {
+    return [...this.collections.values()].some((collection) => !collection.notified
+      && collection.members.some((member) => member.name === name && member.assignment === assignment));
+  }
+
+  private collectionClaims(name: string, assignment: number): string[] {
+    return [...this.collections.values()]
+      .filter((collection) => !collection.notified
+        && collection.members.some((member) => member.name === name && member.assignment === assignment))
+      .map((collection) => collectionClaim(collection.id));
   }
 
   private persistAndNotify(record: OwnedAgentRecord, claimed: boolean): void {
@@ -494,16 +638,18 @@ export class AgentManager {
         throw error;
       }
     }
-    this.turns.get(record.name)?.controller.abort();
+    const turn = this.turns.get(record.name);
+    turn?.controller.abort();
     this.turns.delete(record.name);
     if (record.tabId) {
       try {
         await this.herdr.closeTab(record.tabId);
       } catch (error) {
-        record.status = "failed";
+        record.status = "working";
         record.lastError = `Could not close owned tab ${record.tabId}: ${(error as Error).message}`;
         record.updatedAt = Date.now();
         this.persist();
+        if (turn && !this.stopped) this.watch(record, undefined, turn);
         throw error;
       }
     }
@@ -511,7 +657,19 @@ export class AgentManager {
     record.paneId = undefined;
     record.tabId = undefined;
     record.updatedAt = Date.now();
+    this.settleClosedTurn(record, turn);
+  }
+
+  private settleClosedTurn(record: OwnedAgentRecord, turn: TurnState | undefined): void {
+    if (turn) {
+      record.completedAssignment = turn.assignment;
+      record.notifiedAssignment = turn.assignment;
+      record.lastResult ??= `Assignment ${turn.assignment} was ${record.status}.`;
+      this.captureCollectionResults(record);
+    }
     this.persist();
+    this.completeCollections();
+    turn?.resolve(cloneRecord(record));
   }
 
   private liveCount(): number {
@@ -541,7 +699,7 @@ export class AgentManager {
   }
 
   private persist(): void {
-    this.callbacks.persist(this.getRecords());
+    this.callbacks.persist(this.getRecords(), this.getCollections());
   }
 }
 
@@ -557,7 +715,16 @@ function resolveRuntime(identity: AgentIdentity, defaults: RuntimeSettings, pare
 }
 
 function handoff(task: string): string {
-  return `Complete this assignment for the parent session. Return a concise result when done.\n\n${task.trim()}`;
+  return [
+    "Complete this assignment for the parent session.",
+    "Lead with the result or recommendation and keep the detail proportional to the assignment.",
+    "Include evidence, changed files, verification, uncertainty, or required action only when applicable.",
+    "Put important conclusions before lengthy supporting material.",
+    "If the full supporting material is too large, save it as an artifact and return its path.",
+    "Do not force empty sections or a fixed template.",
+    "",
+    task.trim(),
+  ].join("\n");
 }
 
 function makeHerdrAgentName(parentToken: string, name: string): string {
@@ -579,6 +746,20 @@ function truncateResult(text: string, sessionFile: string): string {
 
 function cloneRecord(record: OwnedAgentRecord): OwnedAgentRecord {
   return { ...record };
+}
+
+function cloneCollection(collection: OwnedAgentCollection): OwnedAgentCollection {
+  return {
+    ...collection,
+    members: collection.members.map((member) => ({
+      ...member,
+      result: member.result ? cloneRecord(member.result) : undefined,
+    })),
+  };
+}
+
+function collectionClaim(id: string): string {
+  return `collection:${id}`;
 }
 
 async function waitWithSignal<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {

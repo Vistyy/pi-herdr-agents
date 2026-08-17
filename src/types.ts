@@ -45,11 +45,29 @@ export interface OwnedAgentRecord {
   updatedAt: number;
 }
 
-export interface OwnedAgentSnapshot {
+export interface OwnedAgentCollectionMember {
+  name: string;
+  assignment: number;
+  result?: OwnedAgentRecord;
+}
+
+export interface OwnedAgentCollection {
+  id: string;
+  members: OwnedAgentCollectionMember[];
+  createdAt: number;
+  notified: boolean;
+}
+
+export type OwnedAgentSnapshot = {
   version: 1;
   parentSessionId: string;
   records: OwnedAgentRecord[];
-}
+} | {
+  version: 2;
+  parentSessionId: string;
+  records: OwnedAgentRecord[];
+  collections: OwnedAgentCollection[];
+};
 
 export interface HerdrAgent {
   name?: string;

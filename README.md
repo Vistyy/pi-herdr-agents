@@ -160,6 +160,7 @@ The delegation extension, the global `herdr` and `session-routing` skills, and t
 - `start_agent`
 - `send_agent`
 - `wait_agents`
+- `collect_agents`
 - `list_agents`
 - `interrupt_agent`
 - `close_agent`
@@ -169,7 +170,7 @@ This keeps parent-only delegation policy and controls out of child prompts.
 
 ## Agent behavior
 
-The extension registers the six delegation tools above when at least one valid identity exists.
+The extension registers the seven delegation tools above when at least one valid identity exists.
 
 Each owned agent opens in a new tab in the parent session's current Herdr workspace and uses the parent's working directory.
 The extension does not create Git worktrees or prevent writes.
@@ -178,17 +179,28 @@ The parent retains outcome framing, authoritative project context, cross-cutting
 A delegated scope has one owner, and concurrent agents must not receive overlapping repository write scopes.
 
 A normal task agent closes after it reports its result.
+The assignment prompt asks the agent to lead with its result or recommendation and include applicable evidence, changed files, verification, uncertainty, and required action without forcing a fixed template.
 Set `keep_open: true` when starting an agent to keep it as a persistent collaborator.
 Sending a message to a closed agent resumes its Pi session in a new tab.
 The extension reloads `config.json` and the selected identity file before it starts or resumes a child, so edits apply without reloading the parent Pi session.
 
 Completion sends a hidden follow-up message to the parent and triggers a parent turn.
-The full child result remains available to the parent model without rendering the message in the terminal UI.
+The parent receives the latest assistant text, subject to Pi's output limits.
+If that text is truncated, the full child conversation remains in the recorded child session file but is not automatically loaded into the parent model context.
 If the parent is active when an agent completes, the extension defers the follow-up until that parent turn settles.
 Calling `wait_agents` claims selected results, including deferred completions from the current parent turn, and suppresses their automatic notifications.
+Use it only when the next action in the current turn depends on those results.
+Otherwise, continue useful work or respond to the user instead of waiting.
 Canceling `wait_agents` does not stop its agents or lose their later completion notifications.
 While `wait_agents` runs, its tool row reports the selected agents, completed agents, and agents that are still pending.
-In TUI mode, a widget above the editor shows each live owned agent's status and marks agents claimed by `wait_agents`.
+
+Calling `collect_agents` registers a nonblocking barrier for the named agents' fixed current assignments.
+It returns immediately, includes assignments that have already settled, suppresses pending individual notifications, and sends one hidden parent follow-up after all named assignments settle.
+Successful, failed, blocked, and interrupted results all satisfy the barrier.
+Pending collections survive a Pi extension reload.
+An individual notification that was already delivered before collection registration cannot be retracted.
+
+In TUI mode, a widget above the editor shows each live owned agent's status and marks agents whose results are claimed by a wait or collection.
 
 Only the same parent Pi session can list or resume its owned agents.
 Forked and unrelated Pi sessions do not adopt them.
