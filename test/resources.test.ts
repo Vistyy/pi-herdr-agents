@@ -22,6 +22,7 @@ const inherited = {
   ],
   skills: [
     { value: "/skills/review/SKILL.md", aliases: ["review", "/skills/review/SKILL.md"] },
+    { value: "/skills/herdr/SKILL.md", aliases: ["herdr", "/skills/herdr/SKILL.md"] },
     { value: "/skills/session-routing/SKILL.md", aliases: ["session-routing", "/skills/session-routing/SKILL.md"] },
   ],
 };
@@ -48,7 +49,7 @@ test("resource selectors apply defaults before identity filters", () => {
   assert.equal(resolved.thinking, "high");
   assert.deepEqual(resolved.tools, ["read", "edit"]);
   assert.deepEqual(resolved.extensions, ["/extensions/alpha/index.ts"]);
-  assert.deepEqual(resolved.skills, ["/skills/review/SKILL.md", "/skills/session-routing/SKILL.md"]);
+  assert.deepEqual(resolved.skills, ["/skills/review/SKILL.md"]);
 });
 
 test("an empty resource list selects no inherited resources", () => {
@@ -65,19 +66,23 @@ test("an empty resource list selects no inherited resources", () => {
   assert.deepEqual(resolved.skills, []);
 });
 
-test("delegation tools are unavailable even when force-included", () => {
+test("delegation tools and skills are unavailable even when force-included", () => {
   const resolved = resolveRuntimeSettings({
-    identity: identity({ tools: ["+start_agent", "+read"] }),
-    defaults: { tools: [] },
+    identity: identity({
+      tools: ["+start_agent", "+read"],
+      skills: ["+herdr", "+session-routing", "+review"],
+    }),
+    defaults: { tools: [], skills: [] },
     parent: {},
     inherited,
     activeTools: ["read", "start_agent", "send_agent", "close_agent"],
   });
 
   assert.deepEqual(resolved.tools, ["read"]);
+  assert.deepEqual(resolved.skills, ["/skills/review/SKILL.md"]);
 });
 
-test("Pi discovery supplies inherited resources and removes recursive delegation resources", async () => {
+test("Pi discovery supplies inherited resources and removes the delegation extension", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-herdr-resources-"));
   const agentDir = join(root, "agent");
   const extensionRoot = join(agentDir, "extensions");
@@ -105,13 +110,12 @@ test("Pi discovery supplies inherited resources and removes recursive delegation
     agentDir,
     projectTrusted: false,
     packageRoot,
-    herdrSkillRoot,
   });
 
   assert.equal(discovered.extensions.some((resource) => resource.value === join(extensionRoot, "keep.ts")), true);
   assert.equal(discovered.extensions.some((resource) => resource.value.startsWith(packageRoot)), false);
   assert.equal(discovered.skills.some((resource) => resource.aliases.includes("keep")), true);
-  assert.equal(discovered.skills.some((resource) => resource.aliases.includes("herdr")), false);
+  assert.equal(discovered.skills.some((resource) => resource.aliases.includes("herdr")), true);
   assert.equal(discovered.extensions.some((resource) => resource.value === join(projectExtensionRoot, "project.ts")), false);
   assert.equal(discovered.skills.some((resource) => resource.aliases.includes("project")), false);
 
@@ -120,7 +124,6 @@ test("Pi discovery supplies inherited resources and removes recursive delegation
     agentDir,
     projectTrusted: true,
     packageRoot,
-    herdrSkillRoot,
   });
   assert.equal(trusted.extensions.some((resource) => resource.value === join(projectExtensionRoot, "project.ts")), true);
   assert.equal(trusted.skills.some((resource) => resource.aliases.includes("project")), true);

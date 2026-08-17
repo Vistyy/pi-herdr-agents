@@ -55,8 +55,7 @@ When no valid identities exist, it registers no LLM tools.
   "defaults": {
     "provider": "openai-codex",
     "model": "gpt-5.6-sol",
-    "thinking": "medium",
-    "skills": ["!session-routing"]
+    "thinking": "medium"
   }
 }
 ```
@@ -156,7 +155,7 @@ Relative extension and skill paths in `config.json` resolve from the configurati
 Relative paths in an identity resolve from that identity file's directory.
 A leading `~/` resolves from the home directory.
 
-The delegation extension, the global `herdr` skill, and these delegation tools are always excluded from children:
+The delegation extension, the global `herdr` and `session-routing` skills, and these delegation tools are always excluded from children:
 
 - `start_agent`
 - `send_agent`
@@ -166,6 +165,7 @@ The delegation extension, the global `herdr` skill, and these delegation tools a
 - `close_agent`
 
 Filters cannot force-include these resources.
+This keeps parent-only delegation policy and controls out of child prompts.
 
 ## Agent behavior
 
@@ -173,8 +173,9 @@ The extension registers the six delegation tools above when at least one valid i
 
 Each owned agent opens in a new tab in the parent session's current Herdr workspace and uses the parent's working directory.
 The extension does not create Git worktrees or prevent writes.
-Its tool guidance recommends owned agents for research, review, and other mostly non-mutating work.
-It prefers the parent session's But Why workflow for repository implementation when But Why is available.
+Its tool guidance makes delegation the default for separable bounded work that requires tool use, including small tasks and implementation.
+The parent retains outcome framing, cross-cutting decisions, synthesis, and user communication.
+A delegated scope has one owner, and concurrent agents must not receive overlapping repository write scopes.
 
 A normal task agent closes after it reports its result.
 Set `keep_open: true` when starting an agent to keep it as a persistent collaborator.

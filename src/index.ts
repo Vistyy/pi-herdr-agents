@@ -37,7 +37,6 @@ export default async function piHerdrAgents(pi: ExtensionAPI): Promise<void> {
 
   const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
   const agentDir = dirname(configDir);
-  const herdrSkillRoot = join(agentDir, "skills", "herdr");
 
   let manager: AgentManager | undefined;
   let notifications: DeferredNotifications<OwnedAgentRecord> | undefined;
@@ -101,7 +100,6 @@ export default async function piHerdrAgents(pi: ExtensionAPI): Promise<void> {
               agentDir,
               projectTrusted: ctx.isProjectTrusted(),
               packageRoot,
-              herdrSkillRoot,
             });
             inheritedResources.set(cwd, inherited);
           }
@@ -153,8 +151,12 @@ function registerTools(pi: ExtensionAPI, config: ExtensionConfig, getManager: ()
     description: `Start an owned Pi agent in a new tab in the current Herdr workspace. Returns after the agent accepts its assignment. Available identities:\n${identityCatalog}`,
     promptSnippet: "Start an owned Pi agent in a new Herdr tab",
     promptGuidelines: [
-      "Use start_agent for bounded delegated research, review, or other mostly non-mutating work.",
-      "Do not assign overlapping repository write tasks to owned agents; prefer the parent session's But Why workflow for repository implementation when available.",
+      "Default to start_agent for each separable bounded deliverable before gathering its detailed working context.",
+      "If completing a separable deliverable requires file reads, searches, commands, investigation, implementation, review, or verification, use start_agent even when the work is small or tightly coupled to the parent decision.",
+      "Perform work in the parent session only when it uses context already present without tools, requires direct user interaction, or cannot be assigned with a compact result contract.",
+      "Keep outcome framing, cross-cutting decisions, synthesis, and user communication in the parent session.",
+      "After delegating a scope with start_agent, do not gather its evidence or perform the same work in the parent session.",
+      "Do not assign overlapping repository write scopes to concurrent agents.",
     ],
     parameters: Type.Object({
       name: Type.String({ description: "Unique task name matching [a-z][a-z0-9_-]{0,28}" }),

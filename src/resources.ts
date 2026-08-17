@@ -14,6 +14,7 @@ const DELEGATION_TOOLS = new Set([
   "interrupt_agent",
   "close_agent",
 ]);
+const DELEGATION_SKILLS = new Set(["herdr", "session-routing"]);
 
 interface SelectableResource {
   value: string;
@@ -30,7 +31,6 @@ export async function discoverInheritedResources(options: {
   agentDir: string;
   projectTrusted: boolean;
   packageRoot: string;
-  herdrSkillRoot: string;
 }): Promise<InheritedResources> {
   const settingsManager = SettingsManager.create(options.cwd, options.agentDir);
   settingsManager.setProjectTrusted(options.projectTrusted);
@@ -59,7 +59,6 @@ export async function discoverInheritedResources(options: {
       ]),
     }));
   const skills = loader.getSkills().skills
-    .filter((skill) => !isWithin(skill.filePath, options.herdrSkillRoot))
     .map((skill) => ({
       value: skill.filePath,
       aliases: unique([
@@ -89,7 +88,11 @@ export function resolveRuntimeSettings(options: {
     thinking: options.identity.thinking ?? options.defaults.thinking ?? options.parent.thinking,
     tools: selectLayered(toolUniverse, options.defaults.tools, options.identity.tools),
     extensions: selectLayered(options.inherited.extensions, options.defaults.extensions, options.identity.extensions),
-    skills: selectLayered(options.inherited.skills, options.defaults.skills, options.identity.skills),
+    skills: selectLayered(
+      options.inherited.skills.filter((skill) => !skill.aliases.some((alias) => DELEGATION_SKILLS.has(alias))),
+      options.defaults.skills,
+      options.identity.skills,
+    ),
   };
 }
 
