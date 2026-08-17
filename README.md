@@ -174,7 +174,7 @@ The extension registers the six delegation tools above when at least one valid i
 Each owned agent opens in a new tab in the parent session's current Herdr workspace and uses the parent's working directory.
 The extension does not create Git worktrees or prevent writes.
 Its tool guidance makes delegation the default for separable bounded work that requires tool use, including small tasks and implementation.
-The parent retains outcome framing, cross-cutting decisions, synthesis, and user communication.
+The parent retains outcome framing, authoritative project context, cross-cutting decisions, synthesis, evidence checks, and user communication.
 A delegated scope has one owner, and concurrent agents must not receive overlapping repository write scopes.
 
 A normal task agent closes after it reports its result.

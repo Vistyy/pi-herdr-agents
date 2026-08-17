@@ -153,9 +153,9 @@ function registerTools(pi: ExtensionAPI, config: ExtensionConfig, getManager: ()
     promptGuidelines: [
       "Default to start_agent for each separable bounded deliverable before gathering its detailed working context.",
       "If completing a separable deliverable requires file reads, searches, commands, investigation, implementation, review, or verification, use start_agent even when the work is small or tightly coupled to the parent decision.",
-      "Perform work in the parent session only when it uses context already present without tools, requires direct user interaction, or cannot be assigned with a compact result contract.",
+      "Use parent-session tools for outcome framing, authoritative project context, cross-cutting synthesis, conflict resolution, and checking material result evidence. Delegate the bounded execution and detailed working context.",
       "Keep outcome framing, cross-cutting decisions, synthesis, and user communication in the parent session.",
-      "After delegating a scope with start_agent, do not gather its evidence or perform the same work in the parent session.",
+      "While a delegated scope is active, do not gather the same evidence or perform the same work in the parent session. After completion, check only the material evidence needed to integrate the result.",
       "Do not assign overlapping repository write scopes to concurrent agents.",
     ],
     parameters: Type.Object({
