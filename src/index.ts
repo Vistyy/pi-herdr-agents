@@ -114,7 +114,6 @@ export default async function piHerdrAgents(pi: ExtensionAPI): Promise<void> {
           notifications?.complete(notificationKey(record), { kind: "agent", record });
         },
         reloadConfig: () => loadConfig(configDir),
-        activityBus: pi.events,
         warn(message) {
           ctx.ui.notify(message, "warning");
         },
@@ -142,7 +141,6 @@ export default async function piHerdrAgents(pi: ExtensionAPI): Promise<void> {
           });
         },
       },
-      parentSessionId,
     );
     const snapshot = readSnapshot(ctx, parentSessionId);
     await manager.restore(snapshot.records, snapshot.collections);

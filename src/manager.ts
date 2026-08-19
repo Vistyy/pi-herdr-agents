@@ -4,7 +4,6 @@ import { join } from "node:path";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, truncateHead } from "@earendil-works/pi-coding-agent";
 import type { AgentIdentity, ExtensionConfig, OwnedAgentCollection, OwnedAgentRecord, RuntimeSettings } from "./types.js";
 import { buildPiArgs, HerdrClient } from "./herdr.js";
-import { OwnedAssignmentActivityProducer, type HerdrActivityEventBus } from "./activity.js";
 import { readLatestAssistantResult } from "./session-result.js";
 
 interface TurnState {
@@ -30,7 +29,6 @@ export interface ManagerCallbacks {
   changed?(): void;
   reloadConfig?(): Promise<ExtensionConfig>;
   resolveRuntime?(identity: AgentIdentity, cwd: string, defaults: RuntimeSettings): Promise<RuntimeSettings>;
-  activityBus?: HerdrActivityEventBus;
   warn?(message: string): void;
 }
 
@@ -39,7 +37,6 @@ export class AgentManager {
   private readonly turns = new Map<string, TurnState>();
   private readonly collections = new Map<string, OwnedAgentCollection>();
   private readonly interruptions = new Set<string>();
-  private readonly activity: OwnedAssignmentActivityProducer;
   private stopped = false;
 
   constructor(
@@ -50,10 +47,7 @@ export class AgentManager {
     private readonly parentToken: string,
     private readonly parentSettings: RuntimeSettings & { model: string; thinking: NonNullable<RuntimeSettings["thinking"]> },
     private readonly callbacks: ManagerCallbacks,
-    sessionEpoch = parentToken,
-  ) {
-    this.activity = new OwnedAssignmentActivityProducer(sessionEpoch, callbacks.activityBus ?? NOOP_ACTIVITY_BUS);
-  }
+  ) {}
 
   getRecords(): OwnedAgentRecord[] {
     return [...this.records.values()].sort((left, right) => left.updatedAt - right.updatedAt).map(cloneRecord);
@@ -400,7 +394,6 @@ export class AgentManager {
     this.stopped = true;
     for (const turn of this.turns.values()) turn.controller.abort();
     this.turns.clear();
-    this.activity.dispose();
   }
 
   async shutdown(): Promise<void> {
@@ -409,7 +402,6 @@ export class AgentManager {
       if (!record.paneId || record.status === "closed") return;
       await this.closeRecord(record, record.status === "working" ? "interrupted" : "closed").catch(() => undefined);
     }));
-    this.activity.dispose();
   }
 
   private async reconcileFailedRecord(record: OwnedAgentRecord, signal?: AbortSignal): Promise<void> {
@@ -725,16 +717,9 @@ export class AgentManager {
   }
 
   private persist(): void {
-    const records = this.getRecords();
-    this.callbacks.persist(records, this.getCollections());
-    this.activity.republish(records);
+    this.callbacks.persist(this.getRecords(), this.getCollections());
   }
 }
-
-const NOOP_ACTIVITY_BUS: HerdrActivityEventBus = {
-  emit() {},
-  on() { return () => {}; },
-};
 
 function resolveRuntime(identity: AgentIdentity, defaults: RuntimeSettings, parent: RuntimeSettings): RuntimeSettings {
   return {
