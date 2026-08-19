@@ -51,11 +51,9 @@ export default async function piHerdrAgents(pi: ExtensionAPI): Promise<void> {
 
   let manager: AgentManager | undefined;
   let notifications: DeferredNotifications<ParentNotification> | undefined;
-  let agentView: OwnedAgentViewController | undefined;
   pi.on("session_start", async (_event, ctx) => {
     for (const warning of config.warnings) ctx.ui.notify(warning, "warning");
     const view = OwnedAgentViewController.fromEnvironment();
-    agentView = view;
     try {
       await view.install();
     } catch (error) {
@@ -154,12 +152,6 @@ export default async function piHerdrAgents(pi: ExtensionAPI): Promise<void> {
 
   pi.on("session_shutdown", async (event, ctx) => {
     if (event.reason === "reload") notifications?.flush();
-    if (event.reason !== "reload" && agentView) {
-      await agentView.clearOwned().catch((error) => {
-        ctx.ui.notify(`Could not clear the pi-herdr-agents sidebar filter: ${(error as Error).message}`, "warning");
-      });
-    }
-    agentView = undefined;
     notifications?.clear();
     notifications = undefined;
     if (manager) {

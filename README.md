@@ -10,10 +10,12 @@ Each managed child keeps its canonical Herdr ownership name (`oa-*`).
 The caller-provided `start_agent.name` is published separately as Herdr's display-only agent metadata through the `pi-herdr-agents` metadata source.
 The metadata is guarded to apply to Herdr's authoritative `herdr:pi` lifecycle reporter and does not change Pi state reporting, ownership checks, waits, or rollups.
 
-The extension adds the `pi_herdr_owned=1` pane token to every owned child and installs a transient Herdr Agents view that excludes that token.
+The extension adds the `pi_herdr_owned=1` pane token to every owned child and installs a Herdr-session Agents view that excludes that token.
 This changes only the sidebar projection.
 Owned children remain recognized Herdr agents, and `agent.list`, `agent.get`, `agent.read`, `agent.prompt`, notifications, and tabs are unchanged.
-The projection is source-guarded during cleanup.
+The projection remains until another source replaces or clears it, or the Herdr server exits.
+Individual Pi session shutdown does not clear the shared projection.
+Installation is source-guarded.
 If another source already owns the Agents projection, the extension reports a warning and leaves that projection unchanged.
 Herdr 0.8 has no atomic check-and-set view operation, so a narrow race remains between the source-guarded preflight and set request.
 
@@ -31,7 +33,7 @@ It does not fall back to unmanaged child processes.
 Install a released version from GitHub:
 
 ```sh
-pi install git:github.com/Vistyy/pi-herdr-agents@v0.1.11
+pi install git:github.com/Vistyy/pi-herdr-agents@v0.1.12
 ```
 
 Install a local checkout:

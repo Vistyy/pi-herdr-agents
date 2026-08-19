@@ -5,10 +5,8 @@ export interface AgentViewControllerApi {
   clearAgentView(source: string): Promise<AgentViewState>;
 }
 
-/** Owns the extension's transient Agents sidebar projection. */
+/** Installs the extension's Herdr-session Agents sidebar projection. */
 export class OwnedAgentViewController {
-  private ownershipAttempted = false;
-
   constructor(private readonly api: AgentViewControllerApi) {}
 
   static fromEnvironment(): OwnedAgentViewController {
@@ -22,7 +20,6 @@ export class OwnedAgentViewController {
     if (previous.active && previous.source !== HERDR_METADATA_SOURCE) {
       throw new Error(`Herdr Agents sidebar is owned by another source (${previous.source ?? "unknown"}); leaving its projection unchanged.`);
     }
-    this.ownershipAttempted = true;
     let installed: AgentViewState;
     try {
       installed = await this.api.setOwnedAgentView();
@@ -31,14 +28,6 @@ export class OwnedAgentViewController {
     }
     if (!installed.active || installed.source !== HERDR_METADATA_SOURCE) {
       throw new Error("Herdr set response did not confirm the pi-herdr-agents Agents sidebar projection; ownership may still have succeeded.");
-    }
-  }
-
-  async clearOwned(): Promise<void> {
-    if (!this.ownershipAttempted) return;
-    const result = await this.api.clearAgentView(HERDR_METADATA_SOURCE);
-    if (result.active && result.source !== HERDR_METADATA_SOURCE) {
-      throw new Error(`Herdr Agents sidebar changed owner to ${result.source ?? "unknown"}; it was not cleared.`);
     }
   }
 }
