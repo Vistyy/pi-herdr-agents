@@ -3,6 +3,7 @@
   "version": "0.1.11",
   "description": "Owned Pi agents in Herdr tabs.",
   "type": "module",
+  "packageManager": "pnpm@11.21.0",
   "license": "MIT",
   "author": "Vistyy",
   "repository": {

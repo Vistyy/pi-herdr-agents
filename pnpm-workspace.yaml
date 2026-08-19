@@ -1,6 +1,8 @@
 packages:
   - .
 
+pmOnFail: error
+
 allowBuilds:
   '@google/genai': true
   esbuild: true
