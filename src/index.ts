@@ -171,6 +171,7 @@ function registerTools(pi: ExtensionAPI, config: ExtensionConfig, getManager: ()
       "If completing a separable deliverable requires file reads, searches, commands, investigation, implementation, review, or verification, use start_agent even when the work is small or tightly coupled to the parent decision.",
       "Use parent-session tools for outcome framing, authoritative project context, cross-cutting synthesis, conflict resolution, and checking material result evidence. Delegate the bounded execution and detailed working context.",
       "Keep outcome framing, cross-cutting decisions, synthesis, and user communication in the parent session.",
+      "After start_agent or send_agent returns, continue useful independent work or finish the parent turn by default. Do not call wait_agents only to monitor completion.",
       "While a delegated scope is active, do not gather the same evidence or perform the same work in the parent session. After completion, check only the material evidence needed to integrate the result.",
       "Do not assign overlapping repository write scopes to concurrent agents.",
     ],
@@ -188,7 +189,7 @@ function registerTools(pi: ExtensionAPI, config: ExtensionConfig, getManager: ()
         keepOpen: params.keep_open ?? false,
         cwd: ctx.cwd,
       }, signal);
-      return toolResult(`Started ${record.name} with identity ${record.identity}.`, [record]);
+      return toolResult(`Started ${record.name} with identity ${record.identity}. Continue independent work or finish the parent turn; do not call wait_agents just to monitor completion.`, [record]);
     },
   });
 
@@ -197,26 +198,31 @@ function registerTools(pi: ExtensionAPI, config: ExtensionConfig, getManager: ()
     label: "Send Agent",
     description: "Send a new assignment or follow-up to an owned agent. A closed agent is resumed in a new Herdr tab.",
     promptSnippet: "Send a follow-up to an owned agent, reopening it when needed",
-    promptGuidelines: ["Use send_agent for follow-up work that needs an owned agent's existing session context."],
+    promptGuidelines: [
+      "Use send_agent for follow-up work that needs an owned agent's existing session context.",
+      "After start_agent or send_agent returns, continue useful independent work or finish the parent turn by default. Do not call wait_agents only to monitor completion.",
+    ],
     parameters: Type.Object({
       name: Type.String({ description: "Owned agent task name" }),
       message: Type.String({ description: "New assignment or follow-up" }),
     }),
     async execute(_id, params, signal) {
       const record = await getManager().send(params.name, params.message, signal);
-      return toolResult(`Sent assignment ${record.assignment} to ${record.name}.`, [record]);
+      return toolResult(`Sent assignment ${record.assignment} to ${record.name}. Continue independent work or finish the parent turn; do not call wait_agents just to monitor completion.`, [record]);
     },
   });
 
   pi.registerTool({
     name: "wait_agents",
     label: "Wait for Agents",
-    description: "Wait for selected owned agents to settle and return their latest results. Waiting claims those results and suppresses their automatic parent notification.",
-    promptSnippet: "Wait for owned agents and claim their results",
+    description: "Exceptional tool only. Use wait_agents when one specific agent result is a prerequisite for an immediate next tool call in this parent turn and neither continuing nor collect_agents can satisfy that dependency. Do not use it to monitor progress, obtain a final response, or wait for later synthesis. Waiting claims those results and suppresses their automatic parent notification.",
+    promptSnippet: "Wait only for an immediate blocking dependency",
     promptGuidelines: [
-      "Use wait_agents only when the next action in this turn depends on the selected agents.",
-      "Do not wait for independent work. Continue useful work or respond to the user instead.",
-      "Pass explicit names when waiting for a dependency. Use collect_agents for a nonblocking grouped synthesis point.",
+      "Default completion protocol: do not call wait_agents after start_agent or send_agent. Continue useful independent work or finish the parent turn so completion notifications can resume it.",
+      "A final parent response or later synthesis is not an immediate next tool call and is not a reason to wait.",
+      "Use wait_agents only when one specific result is required for an immediate next tool call in this turn and neither yielding nor collect_agents can satisfy that dependency.",
+      "Pass explicit names for that one dependency. Do not omit names to wait for all working agents.",
+      "After collect_agents returns, never call wait_agents for any assignment in that collection. The collection notification supplies the grouped results.",
     ],
     parameters: Type.Object({
       names: Type.Optional(Type.Array(Type.String(), { uniqueItems: true, description: "Agent names. Omit to wait for all working owned agents." })),
@@ -243,11 +249,11 @@ function registerTools(pi: ExtensionAPI, config: ExtensionConfig, getManager: ()
   pi.registerTool({
     name: "collect_agents",
     label: "Collect Agents",
-    description: "Register a nonblocking barrier for fixed current assignments. Returns immediately, suppresses their individual notifications, and sends one parent follow-up after every named assignment settles.",
-    promptSnippet: "Collect owned agent results later without blocking this turn",
+    description: "Register a nonblocking barrier for an exact fixed group of current assignments whose results require one synthesis, whether or not useful independent work remains. Returns immediately, suppresses individual notifications, and sends one parent follow-up with the grouped results after every named assignment settles.",
+    promptSnippet: "Collect an exact group, then yield for one synthesis wake",
     promptGuidelines: [
-      "Use collect_agents when later synthesis needs a fixed group of results but useful independent work remains now.",
-      "After registering a collection, continue useful work or respond to the user. Do not call wait_agents for the same assignments.",
+      "Use collect_agents for an exact fixed group whose results require one synthesis, whether or not useful independent work remains.",
+      "After collect_agents returns, do not call wait_agents for any collected assignment. Continue useful work or finish the parent turn so the collection notification can resume it with the grouped results.",
     ],
     parameters: Type.Object({
       names: Type.Array(Type.String(), {
@@ -260,7 +266,7 @@ function registerTools(pi: ExtensionAPI, config: ExtensionConfig, getManager: ()
       const collection = getManager().collect(params.names);
       const assignments = collection.members.map((member) => `${member.name}#${member.assignment}`).join(", ");
       return {
-        content: [{ type: "text" as const, text: `Registered ${collection.id} for ${assignments}. The parent will be notified after all assignments settle.` }],
+        content: [{ type: "text" as const, text: `Registered ${collection.id} for ${assignments}. The parent will be notified with the grouped results after all assignments settle. Do not call wait_agents for these assignments; continue useful work or finish the parent turn.` }],
         details: { collection },
       };
     },

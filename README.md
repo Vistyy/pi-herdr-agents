@@ -178,6 +178,9 @@ Its tool guidance makes delegation the default for separable bounded work that r
 The parent retains outcome framing, authoritative project context, cross-cutting decisions, synthesis, evidence checks, and user communication.
 A delegated scope has one owner, and concurrent agents must not receive overlapping repository write scopes.
 
+Default completion protocol: after `start_agent` or `send_agent` returns, do not call `wait_agents`.
+Continue useful independent work.
+If no independent work remains, finish the parent turn so the completion notification can resume it.
 A normal task agent closes after it reports its result.
 The assignment prompt asks the agent to lead with its result or recommendation and include applicable evidence, changed files, verification, uncertainty, and required action without forcing a fixed template.
 Set `keep_open: true` when starting an agent to keep it as a persistent collaborator.
@@ -188,14 +191,21 @@ Completion sends a hidden follow-up message to the parent and triggers a parent 
 The parent receives the latest assistant text, subject to Pi's output limits.
 If that text is truncated, the full child conversation remains in the recorded child session file but is not automatically loaded into the parent model context.
 If the parent is active when an agent completes, the extension defers the follow-up until that parent turn settles.
+`wait_agents` is an exceptional tool.
+Use it only when one specific agent result is a prerequisite for an immediate next tool call in the current parent turn and neither yielding nor `collect_agents` can satisfy that dependency.
+A task that needs a later final synthesis is not by itself a reason to preserve the current turn.
+Do not use `wait_agents` to monitor progress, obtain a final response, or wait for later synthesis.
 Calling `wait_agents` claims selected results, including deferred completions from the current parent turn, and suppresses their automatic notifications.
-Use it only when the next action in the current turn depends on those results.
-Otherwise, continue useful work or respond to the user instead of waiting.
+After `collect_agents` returns, do not call `wait_agents` for any assignment in that collection.
+The collection notification supplies the grouped results.
+If no immediate blocking tool call remains, finish the parent turn so the notification can resume it.
 Canceling `wait_agents` does not stop its agents or lose their later completion notifications.
 While `wait_agents` runs, its tool row reports the selected agents, completed agents, and agents that are still pending.
 
-Calling `collect_agents` registers a nonblocking barrier for the named agents' fixed current assignments.
-It returns immediately, includes assignments that have already settled, suppresses pending individual notifications, and sends one hidden parent follow-up after all named assignments settle.
+Calling `collect_agents` registers a nonblocking barrier for an exact fixed group of current assignments whose results require one synthesis, whether or not useful independent work remains.
+It returns immediately, includes assignments that have already settled, suppresses pending individual notifications, and sends one hidden parent follow-up with the grouped results after all named assignments settle.
+After registering a collection, continue useful work or finish the parent turn.
+Do not call `wait_agents` for any assignment in the collection.
 Successful, failed, blocked, and interrupted results all satisfy the barrier.
 Pending collections survive a Pi extension reload.
 An individual notification that was already delivered before collection registration cannot be retracted.
