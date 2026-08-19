@@ -33,7 +33,7 @@ It does not fall back to unmanaged child processes.
 Install a released version from GitHub:
 
 ```sh
-pi install git:github.com/Vistyy/pi-herdr-agents@v0.1.13
+pi install git:github.com/Vistyy/pi-herdr-agents@v0.1.14
 ```
 
 Install a local checkout:
@@ -195,7 +195,8 @@ Default completion protocol: after `start_agent` or `send_agent` returns, do not
 Continue useful independent work.
 If no independent work remains, finish the parent turn so the completion notification can resume it.
 A normal task agent closes after it reports its result.
-The assignment prompt asks the agent to lead with its result or recommendation and include applicable evidence, changed files, verification, uncertainty, and required action without forcing a fixed template.
+Every child receives a common appended system prompt with shared-directory safety and ownership rules and the generic result, evidence, and verification reporting contract.
+The assignment user message contains the task-specific scope, acceptance criteria, and output requirements.
 Set `keep_open: true` when starting an agent to keep it as a persistent collaborator.
 Sending a message to a closed agent resumes its Pi session in a new tab.
 The extension reloads `config.json` and the selected identity file before it starts or resumes a child, so edits apply without reloading the parent Pi session.
@@ -233,9 +234,11 @@ Forked and unrelated Pi sessions do not adopt them.
 The extension resolves inherited resources before launch and passes explicit tool, extension, and skill lists to the child.
 The child disables automatic extension, skill, and prompt-template discovery so its launch cannot add resources outside those resolved lists.
 It still loads applicable repository `AGENTS.md` and `CLAUDE.md` context files.
-It uses Pi's default coding prompt, with an optional identity body appended to it.
+It uses Pi's default coding prompt, followed by the common appended system prompt and any profile-specific identity body.
+Frontmatter-only identities receive the common system prompt without profile-specific instructions.
+The actual assignment is sent as a user message after these system instructions.
 
-This controls Pi resources, not operating-system access.
+This controls Pi resources and provides prompt guidance, not operating-system access or filesystem enforcement.
 A child with shell access can still start processes permitted by the operating system.
 
 ## Lifecycle

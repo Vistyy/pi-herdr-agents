@@ -3,6 +3,7 @@ import { copyFile, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
+import { composeChildSystemPrompt } from "../src/child-prompt.js";
 import type { HerdrClient } from "../src/herdr.js";
 import { AgentManager, type WaitProgress } from "../src/manager.js";
 import type { ExtensionConfig, HerdrAgent, OwnedAgentCollection, OwnedAgentRecord } from "../src/types.js";
@@ -127,8 +128,7 @@ test("a claimed task result is returned, not automatically announced, and its ta
   );
 
   await manager.start({ name: "review", identityName: "reviewer", task: "Review it.", keepOpen: false, cwd: "/repo" });
-  assert.match(fake.prompts[0], /Lead with the result or recommendation/);
-  assert.match(fake.prompts[0], /Do not force empty sections or a fixed template/);
+  assert.equal(fake.prompts[0], "Review it.");
   const progress: WaitProgress[] = [];
   const waiting = manager.wait(["review"], undefined, (update) => progress.push(update));
   assert.deepEqual(progress, [{ selected: ["review"], completed: [], waiting: ["review"] }]);
@@ -178,7 +178,30 @@ test("a start reloads the identity before spawning the child", async () => {
   const modelIndex = fake.startArgs.indexOf("--model");
   assert.equal(fake.startArgs[modelIndex + 1], "updated-model");
   const instructionsIndex = fake.startArgs.indexOf("--append-system-prompt");
-  assert.equal(await readFile(fake.startArgs[instructionsIndex + 1], "utf8"), "Use the updated profile.\n");
+  assert.equal(await readFile(fake.startArgs[instructionsIndex + 1], "utf8"), composeChildSystemPrompt("Use the updated profile."));
+});
+
+test("a frontmatter-only identity receives the common child prompt", async () => {
+  const fake = new FakeHerdr();
+  fake.sessionFile = await childSessionFile();
+  const config = testConfig();
+  config.identities[0] = { ...config.identities[0], instructions: undefined };
+  const manager = new AgentManager(
+    fake as unknown as HerdrClient,
+    config,
+    "w1",
+    dirname(fake.sessionFile),
+    "parent",
+    { provider: "test", model: "test/model", thinking: "medium" },
+    { persist() {}, notify() {} },
+  );
+
+  await manager.start({ name: "fast", identityName: "reviewer", task: "Check it.", keepOpen: true, cwd: "/repo" });
+
+  const instructionsIndex = fake.startArgs.indexOf("--append-system-prompt");
+  assert.notEqual(instructionsIndex, -1);
+  assert.equal(await readFile(fake.startArgs[instructionsIndex + 1], "utf8"), composeChildSystemPrompt());
+  assert.equal(fake.prompts[0], "Check it.");
 });
 
 test("re-reports display metadata when restoring a live child", async () => {

@@ -44,7 +44,7 @@ test("buildPiArgs disables discovery and replaces resource lists", () => {
   ]);
 });
 
-test("buildPiArgs omits an identity prompt when the identity has no body", () => {
+test("buildPiArgs omits an appended prompt file when none is supplied", () => {
   const args = buildPiArgs({
     settings: { tools: ["read"] },
     sessionFile: "/session.jsonl",

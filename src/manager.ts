@@ -3,6 +3,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, truncateHead } from "@earendil-works/pi-coding-agent";
 import type { AgentIdentity, ExtensionConfig, OwnedAgentCollection, OwnedAgentRecord, RuntimeSettings } from "./types.js";
+import { composeChildSystemPrompt } from "./child-prompt.js";
 import { buildPiArgs, HerdrClient } from "./herdr.js";
 import { readLatestAssistantResult } from "./session-result.js";
 
@@ -177,7 +178,7 @@ export class AgentManager {
       }
       await this.herdr.reportDisplayAgent(agent.pane_id, options.name, signal);
 
-      const prompted = await this.herdr.prompt(record.paneId, handoff(options.task), signal);
+      const prompted = await this.herdr.prompt(record.paneId, options.task.trim(), signal);
       record.status = "working";
       record.updatedAt = Date.now();
       this.persist();
@@ -233,7 +234,7 @@ export class AgentManager {
     record.updatedAt = Date.now();
     this.persist();
     try {
-      const prompted = await this.herdr.prompt(record.paneId!, handoff(message), signal);
+      const prompted = await this.herdr.prompt(record.paneId!, message.trim(), signal);
       this.watch(record, prompted.state_change_seq);
     } catch (error) {
       Object.assign(record, previous, { updatedAt: Date.now() });
@@ -488,12 +489,11 @@ export class AgentManager {
     }
   }
 
-  private async writeInstructions(identity: AgentIdentity): Promise<string | undefined> {
-    if (!identity.instructions) return undefined;
+  private async writeInstructions(identity: AgentIdentity): Promise<string> {
     const promptDir = join(this.sessionDir, "prompts");
     await mkdir(promptDir, { recursive: true });
     const path = join(promptDir, `${identity.name}.md`);
-    await writeFile(path, `${identity.instructions.trim()}\n`, { encoding: "utf8", mode: 0o600 });
+    await writeFile(path, composeChildSystemPrompt(identity.instructions), { encoding: "utf8", mode: 0o600 });
     return path;
   }
 
@@ -730,19 +730,6 @@ function resolveRuntime(identity: AgentIdentity, defaults: RuntimeSettings, pare
     extensions: identity.extensions ?? defaults.extensions ?? [],
     skills: identity.skills ?? defaults.skills ?? [],
   };
-}
-
-function handoff(task: string): string {
-  return [
-    "Complete this assignment for the parent session.",
-    "Lead with the result or recommendation and keep the detail proportional to the assignment.",
-    "Include evidence, changed files, verification, uncertainty, or required action only when applicable.",
-    "Put important conclusions before lengthy supporting material.",
-    "If the full supporting material is too large, save it as an artifact and return its path.",
-    "Do not force empty sections or a fixed template.",
-    "",
-    task.trim(),
-  ].join("\n");
 }
 
 function makeHerdrAgentName(parentToken: string, name: string): string {
