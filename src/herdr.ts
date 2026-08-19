@@ -23,6 +23,8 @@ export interface CreatedTab {
   paneId: string;
 }
 
+export const HERDR_METADATA_SOURCE = "pi-herdr-agents";
+
 class HerdrCommandError extends Error {
   constructor(readonly code: string | undefined, message: string) {
     super(message);
@@ -113,6 +115,24 @@ export class HerdrClient {
       "herdr agent prompt",
     );
     return normalizeAgent(result.agent ?? result);
+  }
+
+  async reportDisplayAgent(paneId: string, displayAgent: string, signal?: AbortSignal): Promise<void> {
+    const result = await this.run("herdr", [
+      "pane",
+      "report-metadata",
+      paneId,
+      "--source",
+      HERDR_METADATA_SOURCE,
+      "--agent",
+      "pi",
+      "--applies-to-source",
+      "herdr:pi",
+      "--display-agent",
+      displayAgent,
+    ], { signal, timeout: 10_000 });
+    if (result.code === 0 && !result.stdout.trim() && !result.stderr.trim()) return;
+    parseEnvelope(result, "herdr pane report-metadata");
   }
 
   async waitForTurn(target: string, baselineSequence: number, signal?: AbortSignal): Promise<HerdrAgent> {

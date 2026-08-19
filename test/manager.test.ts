@@ -53,6 +53,7 @@ class FakeHerdr {
   agentName = "";
   startArgs: string[] = [];
   prompts: string[] = [];
+  displayAgents: Array<{ paneId: string; name: string }> = [];
 
   async createTab() {
     this.createCalls += 1;
@@ -74,6 +75,9 @@ class FakeHerdr {
       agent_status: "idle" as const,
       name: this.agentName,
     };
+  }
+  async reportDisplayAgent(paneId: string, name: string) {
+    this.displayAgents.push({ paneId, name });
   }
   async prompt(_paneId?: string, message?: string) {
     if (message) this.prompts.push(message);
@@ -169,6 +173,30 @@ test("a start reloads the identity before spawning the child", async () => {
   assert.equal(fake.startArgs[modelIndex + 1], "updated-model");
   const instructionsIndex = fake.startArgs.indexOf("--append-system-prompt");
   assert.equal(await readFile(fake.startArgs[instructionsIndex + 1], "utf8"), "Use the updated profile.\n");
+});
+
+test("publishes the caller name as display metadata on start and reopen", async () => {
+  const fake = new FakeHerdr();
+  fake.sessionFile = await childSessionFile();
+  const manager = new AgentManager(
+    fake as unknown as HerdrClient,
+    testConfig(),
+    "w1",
+    dirname(fake.sessionFile),
+    "parent",
+    { provider: "test", model: "test/model", thinking: "medium" },
+    { persist() {}, notify() {} },
+  );
+
+  await manager.start({ name: "review", identityName: "reviewer", task: "Review it.", keepOpen: true, cwd: "/repo" });
+  await manager.close("review");
+  await manager.send("review", "Resume the review.");
+
+  assert.deepEqual(fake.displayAgents, [
+    { paneId: "w1:p2", name: "review" },
+    { paneId: "w1:p2", name: "review" },
+  ]);
+  assert.equal(fake.agentName, "oa-parent-review-c97a");
 });
 
 test("a wait claims a completion deferred during the current parent turn", async () => {

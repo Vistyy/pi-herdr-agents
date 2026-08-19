@@ -66,6 +66,25 @@ test("buildPiArgs preserves an explicit provider when the model ID contains a sl
   ]);
 });
 
+test("reports a display agent through distinct display-only metadata", async () => {
+  const calls: string[][] = [];
+  const run: CommandRunner = async (_command, args) => {
+    calls.push(args);
+    return { code: 0, stderr: "", stdout: "" };
+  };
+  const client = new HerdrClient(run);
+
+  await client.reportDisplayAgent("w1:p2", "review");
+
+  assert.deepEqual(calls, [[
+    "pane", "report-metadata", "w1:p2",
+    "--source", "pi-herdr-agents",
+    "--agent", "pi",
+    "--applies-to-source", "herdr:pi",
+    "--display-agent", "review",
+  ]]);
+});
+
 test("waitForTurn observes a post-prompt state change before waiting for settlement", async () => {
   const calls: string[][] = [];
   const run: CommandRunner = async (_command, args) => {

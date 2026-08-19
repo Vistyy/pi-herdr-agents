@@ -6,6 +6,10 @@ An **agent identity** is global configuration that describes when an agent is us
 
 An **owned agent** is a resumable Pi session created from an agent identity and owned by one parent Pi session.
 
+Each managed child keeps its canonical Herdr ownership name (`oa-*`).
+The caller-provided `start_agent.name` is published separately as Herdr's display-only agent metadata through the `pi-herdr-agents` metadata source.
+The metadata is guarded to apply to Herdr's authoritative `herdr:pi` lifecycle reporter and does not change Pi state reporting, ownership checks, waits, or rollups.
+
 ## Requirements
 
 - Pi 0.84.1 or newer.
@@ -20,7 +24,7 @@ It does not fall back to unmanaged child processes.
 Install a released version from GitHub:
 
 ```sh
-pi install git:github.com/Vistyy/pi-herdr-agents@v0.1.9
+pi install git:github.com/Vistyy/pi-herdr-agents@v0.1.10
 ```
 
 Install a local checkout:

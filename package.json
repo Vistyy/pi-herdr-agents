@@ -1,6 +1,6 @@
 {
   "name": "@vistyy/pi-herdr-agents",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "description": "Owned Pi agents in Herdr tabs.",
   "type": "module",
   "license": "MIT",
