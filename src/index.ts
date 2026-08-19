@@ -10,6 +10,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { getConfigDirectory, loadConfig } from "./config.js";
+import { OwnedAgentViewController } from "./agent-view.js";
 import { HerdrClient } from "./herdr.js";
 import { AgentManager, type WaitProgress } from "./manager.js";
 import { DeferredNotifications } from "./notifications.js";
@@ -50,8 +51,16 @@ export default async function piHerdrAgents(pi: ExtensionAPI): Promise<void> {
 
   let manager: AgentManager | undefined;
   let notifications: DeferredNotifications<ParentNotification> | undefined;
+  let agentView: OwnedAgentViewController | undefined;
   pi.on("session_start", async (_event, ctx) => {
     for (const warning of config.warnings) ctx.ui.notify(warning, "warning");
+    const view = OwnedAgentViewController.fromEnvironment();
+    agentView = view;
+    try {
+      await view.install();
+    } catch (error) {
+      ctx.ui.notify(`Could not install the pi-herdr-agents sidebar filter: ${(error as Error).message}`, "warning");
+    }
     if (config.identities.length === 0) return;
 
     const parentSessionId = ctx.sessionManager.getSessionId();
@@ -107,6 +116,10 @@ export default async function piHerdrAgents(pi: ExtensionAPI): Promise<void> {
           notifications?.complete(notificationKey(record), { kind: "agent", record });
         },
         reloadConfig: () => loadConfig(configDir),
+        activityBus: pi.events,
+        warn(message) {
+          ctx.ui.notify(message, "warning");
+        },
         async resolveRuntime(identity, cwd, defaults) {
           let inherited = inheritedResources.get(cwd);
           if (!inherited) {
@@ -131,6 +144,7 @@ export default async function piHerdrAgents(pi: ExtensionAPI): Promise<void> {
           });
         },
       },
+      parentSessionId,
     );
     const snapshot = readSnapshot(ctx, parentSessionId);
     await manager.restore(snapshot.records, snapshot.collections);
@@ -140,6 +154,12 @@ export default async function piHerdrAgents(pi: ExtensionAPI): Promise<void> {
 
   pi.on("session_shutdown", async (event, ctx) => {
     if (event.reason === "reload") notifications?.flush();
+    if (event.reason !== "reload" && agentView) {
+      await agentView.clearOwned().catch((error) => {
+        ctx.ui.notify(`Could not clear the pi-herdr-agents sidebar filter: ${(error as Error).message}`, "warning");
+      });
+    }
+    agentView = undefined;
     notifications?.clear();
     notifications = undefined;
     if (manager) {

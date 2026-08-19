@@ -1,3 +1,5 @@
+import { createConnection, type Socket } from "node:net";
+import { randomUUID } from "node:crypto";
 import type { RuntimeSettings, HerdrAgent } from "./types.js";
 
 export interface CommandResult {
@@ -24,6 +26,102 @@ export interface CreatedTab {
 }
 
 export const HERDR_METADATA_SOURCE = "pi-herdr-agents";
+export const HERDR_OWNED_TOKEN = "pi_herdr_owned";
+// Herdr control responses are small; these bounds allow diagnostics while
+// preventing an incomplete newline-delimited response from waiting 10 seconds.
+const MAX_SOCKET_FRAME_BYTES = 64 * 1024;
+const MAX_SOCKET_BUFFER_BYTES = 128 * 1024;
+
+export interface AgentViewState {
+  active: boolean;
+  source?: string;
+  label?: string;
+}
+
+export class HerdrSocketClient {
+  constructor(
+    private readonly socketPath = process.env.HERDR_SOCKET_PATH,
+    private readonly connect: (path: string) => Socket = (path) => createConnection(path),
+  ) {}
+
+  async setOwnedAgentView(): Promise<AgentViewState> {
+    return this.request<AgentViewState>("agent.view.set", {
+      source: HERDR_METADATA_SOURCE,
+      filter: {
+        op: "not",
+        filter: { op: "exists", field: { token: HERDR_OWNED_TOKEN } },
+      },
+    });
+  }
+
+  async clearAgentView(source: string): Promise<AgentViewState> {
+    return this.request<AgentViewState>("agent.view.clear", { source });
+  }
+
+  private async request<T>(method: string, params: unknown): Promise<T> {
+    if (!this.socketPath) throw new Error("HERDR_SOCKET_PATH is unavailable; cannot use the Herdr socket API.");
+    const id = `pi-herdr-agents-${randomUUID()}`;
+    const socket = this.connect(this.socketPath);
+    return new Promise<T>((resolve, reject) => {
+      let buffer = "";
+      let settled = false;
+      const finish = (error?: Error, value?: T) => {
+        if (settled) return;
+        settled = true;
+        socket.destroy();
+        if (error) reject(error);
+        else resolve(value as T);
+      };
+      socket.setEncoding("utf8");
+      socket.setTimeout(10_000, () => finish(new Error(`Herdr socket request ${method} timed out.`)));
+      socket.on("connect", () => {
+        socket.write(`${JSON.stringify({ id, method, params })}\n`);
+      });
+      socket.on("data", (chunk: string | Buffer) => {
+        buffer += chunk.toString();
+        if (Buffer.byteLength(buffer, "utf8") > MAX_SOCKET_BUFFER_BYTES) {
+          finish(new Error(`Herdr socket pending buffer exceeded ${MAX_SOCKET_BUFFER_BYTES} bytes for ${method}.`));
+          return;
+        }
+        let newline: number;
+        while ((newline = buffer.indexOf("\n")) >= 0) {
+          const line = buffer.slice(0, newline);
+          buffer = buffer.slice(newline + 1);
+          if (Buffer.byteLength(line, "utf8") > MAX_SOCKET_FRAME_BYTES) {
+            finish(new Error(`Herdr socket frame exceeded ${MAX_SOCKET_FRAME_BYTES} bytes for ${method}.`));
+            return;
+          }
+          if (!line.trim()) continue;
+          let parsed: unknown;
+          try {
+            parsed = JSON.parse(line);
+          } catch {
+            finish(new Error(`Herdr socket returned invalid JSON for ${method}.`));
+            return;
+          }
+          if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+            finish(new Error(`Herdr socket returned a non-object frame for ${method}.`));
+            return;
+          }
+          const response = parsed as { id?: string; result?: T; error?: { code?: string; message?: string } };
+          if (response.error) {
+            finish(new Error(`Herdr ${method} failed${response.error.code ? ` (${response.error.code})` : ""}: ${response.error.message ?? "unknown error"}`));
+            return;
+          }
+          if (response.id !== id) continue;
+          if (response.result === undefined) {
+            finish(new Error(`Herdr ${method} returned no result.`));
+            return;
+          }
+          finish(undefined, response.result);
+          return;
+        }
+      });
+      socket.on("error", (error) => finish(new Error(`Herdr socket ${method} failed: ${error.message}`)));
+      socket.on("close", () => finish(new Error(`Herdr socket closed before ${method} completed.`)));
+    });
+  }
+}
 
 class HerdrCommandError extends Error {
   constructor(readonly code: string | undefined, message: string) {
@@ -130,6 +228,8 @@ export class HerdrClient {
       "herdr:pi",
       "--display-agent",
       displayAgent,
+      "--token",
+      `${HERDR_OWNED_TOKEN}=1`,
     ], { signal, timeout: 10_000 });
     if (result.code === 0 && !result.stdout.trim() && !result.stderr.trim()) return;
     parseEnvelope(result, "herdr pane report-metadata");

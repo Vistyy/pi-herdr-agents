@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildPiArgs, HerdrClient, type CommandRunner } from "../src/herdr.js";
+import { buildPiArgs, HerdrClient, HERDR_OWNED_TOKEN, type CommandRunner } from "../src/herdr.js";
 
 test("buildPiArgs disables discovery and replaces resource lists", () => {
   const args = buildPiArgs({
@@ -82,6 +82,7 @@ test("reports a display agent through distinct display-only metadata", async () 
     "--agent", "pi",
     "--applies-to-source", "herdr:pi",
     "--display-agent", "review",
+    "--token", `${HERDR_OWNED_TOKEN}=1`,
   ]]);
 });
 

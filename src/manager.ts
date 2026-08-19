@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, truncateHead } from "@earendil-works/pi-coding-agent";
 import type { AgentIdentity, ExtensionConfig, OwnedAgentCollection, OwnedAgentRecord, RuntimeSettings } from "./types.js";
 import { buildPiArgs, HerdrClient } from "./herdr.js";
+import { OwnedAssignmentActivityProducer, type HerdrActivityEventBus } from "./activity.js";
 import { readLatestAssistantResult } from "./session-result.js";
 
 interface TurnState {
@@ -29,6 +30,8 @@ export interface ManagerCallbacks {
   changed?(): void;
   reloadConfig?(): Promise<ExtensionConfig>;
   resolveRuntime?(identity: AgentIdentity, cwd: string, defaults: RuntimeSettings): Promise<RuntimeSettings>;
+  activityBus?: HerdrActivityEventBus;
+  warn?(message: string): void;
 }
 
 export class AgentManager {
@@ -36,6 +39,7 @@ export class AgentManager {
   private readonly turns = new Map<string, TurnState>();
   private readonly collections = new Map<string, OwnedAgentCollection>();
   private readonly interruptions = new Set<string>();
+  private readonly activity: OwnedAssignmentActivityProducer;
   private stopped = false;
 
   constructor(
@@ -46,7 +50,10 @@ export class AgentManager {
     private readonly parentToken: string,
     private readonly parentSettings: RuntimeSettings & { model: string; thinking: NonNullable<RuntimeSettings["thinking"]> },
     private readonly callbacks: ManagerCallbacks,
-  ) {}
+    sessionEpoch = parentToken,
+  ) {
+    this.activity = new OwnedAssignmentActivityProducer(sessionEpoch, callbacks.activityBus ?? NOOP_ACTIVITY_BUS);
+  }
 
   getRecords(): OwnedAgentRecord[] {
     return [...this.records.values()].sort((left, right) => left.updatedAt - right.updatedAt).map(cloneRecord);
@@ -82,6 +89,13 @@ export class AgentManager {
           continue;
         }
         record.tabId = agent.tab_id;
+        try {
+          await this.herdr.reportDisplayAgent(agent.pane_id, record.name);
+        } catch (error) {
+          record.lastError = `Could not refresh owned agent metadata during restore: ${(error as Error).message}`;
+          record.updatedAt = Date.now();
+          this.callbacks.warn?.(`Owned agent ${record.name} remains live, but its Herdr metadata could not be refreshed: ${(error as Error).message}`);
+        }
         if (agent.agent_status === "working" || agent.agent_status === "unknown") {
           record.status = "working";
           this.watch(record);
@@ -197,7 +211,14 @@ export class AgentManager {
     this.assertRunning();
     const record = this.requireRecord(name);
     if (!message.trim()) throw new Error("Message must not be empty.");
-    if (record.status === "failed" && record.paneId) await this.reconcileFailedRecord(record, signal);
+    let metadataReported = false;
+    if (record.status === "failed" && record.paneId) {
+      await this.reconcileFailedRecord(record, signal);
+      metadataReported = true;
+    }
+    if (!metadataReported && record.paneId && record.status !== "closed" && record.status !== "starting") {
+      await this.herdr.reportDisplayAgent(record.paneId, record.name, signal);
+    }
     if (record.status === "closed" || !record.paneId) {
       await this.reloadConfig();
       await this.reopen(record, signal);
@@ -379,6 +400,7 @@ export class AgentManager {
     this.stopped = true;
     for (const turn of this.turns.values()) turn.controller.abort();
     this.turns.clear();
+    this.activity.dispose();
   }
 
   async shutdown(): Promise<void> {
@@ -387,6 +409,7 @@ export class AgentManager {
       if (!record.paneId || record.status === "closed") return;
       await this.closeRecord(record, record.status === "working" ? "interrupted" : "closed").catch(() => undefined);
     }));
+    this.activity.dispose();
   }
 
   private async reconcileFailedRecord(record: OwnedAgentRecord, signal?: AbortSignal): Promise<void> {
@@ -400,6 +423,7 @@ export class AgentManager {
       throw new Error(`Refused to reuse pane ${record.paneId} because it hosts a different Pi session.`);
     }
     record.tabId = agent.tab_id;
+    await this.herdr.reportDisplayAgent(agent.pane_id, record.name, signal);
     if (agent.agent_status === "working" || agent.agent_status === "unknown") {
       record.status = "working";
       record.completedAssignment = undefined;
@@ -701,9 +725,16 @@ export class AgentManager {
   }
 
   private persist(): void {
-    this.callbacks.persist(this.getRecords(), this.getCollections());
+    const records = this.getRecords();
+    this.callbacks.persist(records, this.getCollections());
+    this.activity.republish(records);
   }
 }
+
+const NOOP_ACTIVITY_BUS: HerdrActivityEventBus = {
+  emit() {},
+  on() { return () => {}; },
+};
 
 function resolveRuntime(identity: AgentIdentity, defaults: RuntimeSettings, parent: RuntimeSettings): RuntimeSettings {
   return {

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import type { HerdrClient } from "../src/herdr.js";
+import { HERDR_ACTIVITY_EVENT, type HerdrActivityEventBus, type HerdrActivityUpdate } from "../src/activity.js";
 import { AgentManager, type WaitProgress } from "../src/manager.js";
 import type { ExtensionConfig, HerdrAgent, OwnedAgentCollection, OwnedAgentRecord } from "../src/types.js";
 
@@ -54,6 +55,8 @@ class FakeHerdr {
   startArgs: string[] = [];
   prompts: string[] = [];
   displayAgents: Array<{ paneId: string; name: string }> = [];
+  reportFailure: Error | undefined;
+  closeFailure: Error | undefined;
 
   async createTab() {
     this.createCalls += 1;
@@ -78,6 +81,7 @@ class FakeHerdr {
   }
   async reportDisplayAgent(paneId: string, name: string) {
     this.displayAgents.push({ paneId, name });
+    if (this.reportFailure) throw this.reportFailure;
   }
   async prompt(_paneId?: string, message?: string) {
     if (message) this.prompts.push(message);
@@ -99,7 +103,10 @@ class FakeHerdr {
     return { pane_id: "w1:p2", tab_id: "w1:t2", workspace_id: "w1", agent_status: this.currentStatus, state_change_seq: 1, name: this.agentName };
   }
   async interrupt() {}
-  async closeTab(tabId: string) { this.closed.push(tabId); }
+  async closeTab(tabId: string) {
+    this.closed.push(tabId);
+    if (this.closeFailure) throw this.closeFailure;
+  }
 }
 
 test("a claimed task result is returned, not automatically announced, and its tab closes", async () => {
@@ -144,6 +151,44 @@ test("a claimed task result is returned, not automatically announced, and its ta
   assert.ok(snapshots.length > 0);
 });
 
+test("publishes active assignment snapshots and clears persistent idle agents", async () => {
+  const fake = new FakeHerdr();
+  fake.sessionFile = await childSessionFile();
+  const published: HerdrActivityUpdate[] = [];
+  const activityBus: HerdrActivityEventBus = {
+    emit(channel, data) {
+      if (channel === HERDR_ACTIVITY_EVENT) published.push(data as HerdrActivityUpdate);
+    },
+    on() { return () => {}; },
+  };
+  const manager = new AgentManager(
+    fake as unknown as HerdrClient,
+    testConfig(),
+    "w1",
+    dirname(fake.sessionFile),
+    "parent",
+    { provider: "test", model: "test/model", thinking: "medium" },
+    { persist() {}, notify() {}, activityBus },
+    "parent-session",
+  );
+
+  await manager.start({ name: "review", identityName: "reviewer", task: "Review it.", keepOpen: true, cwd: "/repo" });
+  assert.equal(published.at(-1)?.active, true);
+  assert.equal(published.at(-1)?.workKey.endsWith(":review:1"), true);
+
+  fake.settled.resolve({
+    pane_id: "w1:p2",
+    tab_id: "w1:t2",
+    workspace_id: "w1",
+    agent_status: "done",
+    agent_session: { value: fake.activeSessionFile },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(published.at(-1)?.active, false);
+  assert.equal(published.at(-1)?.workKey.endsWith(":review:1"), true);
+});
+
 test("a start reloads the identity before spawning the child", async () => {
   const fake = new FakeHerdr();
   fake.sessionFile = await childSessionFile();
@@ -173,6 +218,116 @@ test("a start reloads the identity before spawning the child", async () => {
   assert.equal(fake.startArgs[modelIndex + 1], "updated-model");
   const instructionsIndex = fake.startArgs.indexOf("--append-system-prompt");
   assert.equal(await readFile(fake.startArgs[instructionsIndex + 1], "utf8"), "Use the updated profile.\n");
+});
+
+test("re-reports display metadata when restoring a live child", async () => {
+  const fake = new FakeHerdr();
+  fake.sessionFile = await childSessionFile();
+  fake.currentStatus = "working";
+  const manager = new AgentManager(
+    fake as unknown as HerdrClient,
+    testConfig(),
+    "w1",
+    dirname(fake.sessionFile),
+    "parent",
+    { provider: "test", model: "test/model", thinking: "medium" },
+    { persist() {}, notify() {} },
+    "parent-session",
+  );
+
+  await manager.restore([{
+    name: "review",
+    identity: "reviewer",
+    keepOpen: true,
+    status: "working",
+    paneId: "w1:p2",
+    tabId: "w1:t2",
+    sessionFile: fake.sessionFile,
+    cwd: "/repo",
+    assignment: 1,
+    lastTask: "Review.",
+    updatedAt: Date.now(),
+  }]);
+
+  assert.deepEqual(fake.displayAgents, [{ paneId: "w1:p2", name: "review" }]);
+  manager.suspend();
+});
+
+test("keeps a live child when restore metadata refresh fails and retries without spawning", async () => {
+  const fake = new FakeHerdr();
+  fake.sessionFile = await childSessionFile();
+  fake.reportFailure = new Error("metadata transport failure");
+  const warnings: string[] = [];
+  const manager = new AgentManager(
+    fake as unknown as HerdrClient,
+    testConfig(),
+    "w1",
+    dirname(fake.sessionFile),
+    "parent",
+    { provider: "test", model: "test/model", thinking: "medium" },
+    { persist() {}, notify() {}, warn: (message) => warnings.push(message) },
+    "parent-session",
+  );
+
+  await manager.restore([{
+    name: "review",
+    identity: "reviewer",
+    keepOpen: true,
+    status: "idle",
+    paneId: "w1:p2",
+    tabId: "w1:t2",
+    sessionFile: fake.sessionFile,
+    cwd: "/repo",
+    assignment: 1,
+    completedAssignment: 1,
+    lastTask: "Review.",
+    updatedAt: Date.now(),
+  }]);
+
+  assert.equal(manager.getRecords()[0].status, "idle");
+  assert.equal(manager.getRecords()[0].paneId, "w1:p2");
+  assert.equal(manager.getRecords()[0].tabId, "w1:t2");
+  assert.match(warnings[0], /remains live/);
+
+  fake.reportFailure = undefined;
+  await manager.send("review", "Continue the review.");
+  assert.equal(fake.createCalls, 0);
+  assert.deepEqual(fake.displayAgents, [
+    { paneId: "w1:p2", name: "review" },
+    { paneId: "w1:p2", name: "review" },
+  ]);
+  manager.suspend();
+});
+
+test("re-reports display metadata before reusing a failed child", async () => {
+  const fake = new FakeHerdr();
+  fake.sessionFile = await childSessionFile();
+  fake.reportFailure = new Error("metadata transport failure");
+  fake.closeFailure = new Error("tab close failure");
+  const manager = new AgentManager(
+    fake as unknown as HerdrClient,
+    testConfig(),
+    "w1",
+    dirname(fake.sessionFile),
+    "parent",
+    { provider: "test", model: "test/model", thinking: "medium" },
+    { persist() {}, notify() {} },
+    "parent-session",
+  );
+
+  await assert.rejects(
+    manager.start({ name: "review", identityName: "reviewer", task: "Review it.", keepOpen: true, cwd: "/repo" }),
+    /metadata transport failure/,
+  );
+  fake.reportFailure = undefined;
+  fake.closeFailure = undefined;
+  await manager.send("review", "Continue the review.");
+
+  assert.deepEqual(fake.displayAgents, [
+    { paneId: "w1:p2", name: "review" },
+    { paneId: "w1:p2", name: "review" },
+  ]);
+  manager.suspend();
 });
 
 test("publishes the caller name as display metadata on start and reopen", async () => {
@@ -555,6 +710,8 @@ class MultiAgentHerdr {
     if (this.failGetOnce.delete(paneId)) throw new Error("temporary transport failure");
     return { pane_id: paneId, tab_id: `tab-${paneId}`, workspace_id: "w1", agent_status: "working" as const };
   }
+
+  async reportDisplayAgent() {}
 
   async wait(paneId: string) {
     return this.turns.get(paneId)!.promise;
