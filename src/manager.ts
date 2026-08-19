@@ -7,6 +7,8 @@ import { composeChildSystemPrompt } from "./child-prompt.js";
 import { buildPiArgs, HerdrClient } from "./herdr.js";
 import { readLatestAssistantResult } from "./session-result.js";
 
+const INTERRUPT_SETTLE_TIMEOUT_MS = 5_000;
+
 interface TurnState {
   assignment: number;
   claims: Set<string>;
@@ -343,7 +345,10 @@ export class AgentManager {
 
       try {
         await this.herdr.interrupt(paneId, signal);
-        await this.herdr.waitForTurn(paneId, baseline.state_change_seq ?? 0, signal);
+        await this.herdr.waitForTurn(paneId, baseline.state_change_seq ?? 0, signal, {
+          settleTimeoutMs: INTERRUPT_SETTLE_TIMEOUT_MS,
+          acceptSettledStatusWithoutSequence: true,
+        });
         if (record.assignment !== assignment || record.paneId !== paneId) {
           throw new Error(`Owned agent ${name} changed assignments while the interrupt was settling.`);
         }

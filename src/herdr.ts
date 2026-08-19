@@ -25,8 +25,16 @@ export interface CreatedTab {
   paneId: string;
 }
 
+export interface WaitForTurnOptions {
+  /** Bound settlement polling after an interrupt state transition is observed. */
+  settleTimeoutMs?: number;
+  /** Interrupts can settle without Herdr advancing the state sequence. */
+  acceptSettledStatusWithoutSequence?: boolean;
+}
+
 export const HERDR_METADATA_SOURCE = "pi-herdr-agents";
 export const HERDR_OWNED_TOKEN = "pi_herdr_owned";
+const PI_INTERRUPT_KEY = "escape";
 // Herdr control responses are small; these bounds allow diagnostics while
 // preventing an incomplete newline-delimited response from waiting 10 seconds.
 const MAX_SOCKET_FRAME_BYTES = 64 * 1024;
@@ -235,17 +243,44 @@ export class HerdrClient {
     parseEnvelope(result, "herdr pane report-metadata");
   }
 
-  async waitForTurn(target: string, baselineSequence: number, signal?: AbortSignal): Promise<HerdrAgent> {
+  async waitForTurn(
+    target: string,
+    baselineSequence: number,
+    signal?: AbortSignal,
+    options: WaitForTurnOptions = {},
+  ): Promise<HerdrAgent> {
     const deadline = Date.now() + 5_000;
     while (Date.now() < deadline) {
       const agent = await this.getAgent(target, signal);
-      if ((agent.state_change_seq ?? baselineSequence) > baselineSequence) {
-        if (agent.agent_status === "working" || agent.agent_status === "unknown") return this.wait(target, signal);
+      const stateChanged = (agent.state_change_seq ?? baselineSequence) > baselineSequence;
+      const settled = agent.agent_status === "idle" || agent.agent_status === "done" || agent.agent_status === "blocked";
+      if (options.acceptSettledStatusWithoutSequence && settled) return agent;
+      if (stateChanged) {
+        if (agent.agent_status === "working" || agent.agent_status === "unknown") {
+          if (options.settleTimeoutMs !== undefined) {
+            const remaining = Math.max(1, deadline - Date.now());
+            return this.waitForSettlement(target, Math.min(options.settleTimeoutMs, remaining), signal);
+          }
+          return this.wait(target, signal);
+        }
         return agent;
       }
       await delay(50, signal);
     }
+    if (options.settleTimeoutMs !== undefined) {
+      throw new Error("The child agent did not settle after interrupt within 5 seconds.");
+    }
     throw new Error("The child agent did not begin processing the submitted assignment within 5 seconds.");
+  }
+
+  private async waitForSettlement(target: string, timeoutMs: number, signal?: AbortSignal): Promise<HerdrAgent> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const agent = await this.getAgent(target, signal);
+      if (agent.agent_status !== "working" && agent.agent_status !== "unknown") return agent;
+      await delay(Math.min(50, Math.max(1, deadline - Date.now())), signal);
+    }
+    throw new Error(`The child agent did not settle within ${timeoutMs}ms after interrupt.`);
   }
 
   async wait(target: string, signal?: AbortSignal): Promise<HerdrAgent> {
@@ -266,7 +301,7 @@ export class HerdrClient {
 
   async interrupt(target: string, signal?: AbortSignal): Promise<void> {
     parseEnvelope(
-      await this.run("herdr", ["agent", "send-keys", target, "ctrl+c"], { signal, timeout: 10_000 }),
+      await this.run("herdr", ["agent", "send-keys", target, PI_INTERRUPT_KEY], { signal, timeout: 10_000 }),
       "herdr agent send-keys",
     );
   }

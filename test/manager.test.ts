@@ -49,6 +49,7 @@ class FakeHerdr {
   currentStatus: "idle" | "working" | "blocked" = "idle";
   interruptWaitError: Error | undefined;
   interruptFailureStatus: "idle" | "working" | "blocked" | undefined;
+  waitForTurnOptions: unknown;
   reconciliationGate: Promise<void> | undefined;
   gateReconciliation = false;
   agentName = "";
@@ -89,7 +90,8 @@ class FakeHerdr {
     return { pane_id: "w1:p2", tab_id: "w1:t2", workspace_id: "w1", agent_status: "idle" as const };
   }
   async wait() { return this.settled.promise; }
-  async waitForTurn() {
+  async waitForTurn(_paneId?: string, _baselineSequence?: number, _signal?: AbortSignal, options?: unknown) {
+    this.waitForTurnOptions = options;
     if (this.interruptWaitError) {
       if (this.interruptFailureStatus) this.currentStatus = this.interruptFailureStatus;
       this.gateReconciliation = true;
@@ -448,6 +450,13 @@ test("interrupt settles the assignment without closing and permits a follow-up",
   await manager.start({ name: "review", identityName: "reviewer", task: "Review.", keepOpen: false, cwd: "/repo" });
   const interrupted = await manager.interrupt("review");
   assert.equal(interrupted.status, "interrupted");
+  assert.equal(interrupted.paneId, "w1:p2");
+  assert.equal(interrupted.tabId, "w1:t2");
+  assert.equal(interrupted.sessionFile, fake.activeSessionFile);
+  assert.deepEqual(fake.waitForTurnOptions, {
+    settleTimeoutMs: 5_000,
+    acceptSettledStatusWithoutSequence: true,
+  });
   assert.deepEqual(fake.closed, []);
 
   const followUp = await manager.send("review", "Continue differently.");

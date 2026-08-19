@@ -33,7 +33,7 @@ It does not fall back to unmanaged child processes.
 Install a released version from GitHub:
 
 ```sh
-pi install git:github.com/Vistyy/pi-herdr-agents@v0.1.14
+pi install git:github.com/Vistyy/pi-herdr-agents@v0.1.15
 ```
 
 Install a local checkout:
@@ -198,6 +198,9 @@ A normal task agent closes after it reports its result.
 Every child receives a common appended system prompt with shared-directory safety and ownership rules and the generic result, evidence, and verification reporting contract.
 The assignment user message contains the task-specific scope, acceptance criteria, and output requirements.
 Set `keep_open: true` when starting an agent to keep it as a persistent collaborator.
+
+`interrupt_agent` sends Pi's Escape interrupt key, then waits for settlement with a bounded timeout.
+If Herdr still reports the child as working or unknown, the extension preserves the tab and session, retains the assignment lock, and continues reconciliation in the background.
 Sending a message to a closed agent resumes its Pi session in a new tab.
 The extension reloads `config.json` and the selected identity file before it starts or resumes a child, so edits apply without reloading the parent Pi session.
 

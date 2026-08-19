@@ -297,7 +297,7 @@ function registerTools(pi: ExtensionAPI, config: ExtensionConfig, getManager: ()
   pi.registerTool({
     name: "interrupt_agent",
     label: "Interrupt Agent",
-    description: "Send Ctrl+C to one live owned agent without closing its tab or deleting its Pi session.",
+    description: "Send Pi's Escape interrupt key to one live owned agent without closing its tab or deleting its Pi session.",
     promptSnippet: "Interrupt one live owned agent",
     parameters: Type.Object({ name: Type.String({ description: "Owned agent task name" }) }),
     async execute(_id, params, signal) {

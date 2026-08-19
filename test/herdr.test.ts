@@ -113,6 +113,65 @@ test("waitForTurn observes a post-prompt state change before waiting for settlem
   ]);
 });
 
+test("waitForTurn bounds a working settlement wait when requested", async () => {
+  let getCalls = 0;
+  const run: CommandRunner = async (_command, args) => {
+    assert.equal(args[1], "get");
+    getCalls += 1;
+    return {
+      code: 0,
+      stderr: "",
+      stdout: JSON.stringify({ result: { agent: {
+        pane_id: "w1:p2",
+        tab_id: "w1:t2",
+        workspace_id: "w1",
+        agent_status: "working",
+        state_change_seq: 6,
+      } } }),
+    };
+  };
+  const client = new HerdrClient(run);
+  await assert.rejects(
+    client.waitForTurn("w1:p2", 5, undefined, { settleTimeoutMs: 25 }),
+    /did not settle within 25ms after interrupt/,
+  );
+  assert.ok(getCalls >= 2);
+});
+
+test("waitForTurn accepts an interrupt settlement without a sequence change", async () => {
+  const run: CommandRunner = async () => ({
+    code: 0,
+    stderr: "",
+    stdout: JSON.stringify({ result: { agent: {
+      pane_id: "w1:p2",
+      tab_id: "w1:t2",
+      workspace_id: "w1",
+      agent_status: "idle",
+      state_change_seq: 5,
+    } } }),
+  });
+  const client = new HerdrClient(run);
+  const settled = await client.waitForTurn("w1:p2", 5, undefined, {
+    acceptSettledStatusWithoutSequence: true,
+  });
+  assert.equal(settled.agent_status, "idle");
+});
+
+test("interrupt sends Pi's Escape key", async () => {
+  const calls: string[][] = [];
+  const run: CommandRunner = async (_command, args) => {
+    calls.push(args);
+    return {
+      code: 0,
+      stderr: "",
+      stdout: JSON.stringify({ result: { interrupted: true } }),
+    };
+  };
+  const client = new HerdrClient(run);
+  await client.interrupt("w1:p2");
+  assert.deepEqual(calls, [["agent", "send-keys", "w1:p2", "escape"]]);
+});
+
 test("startPi retries the determinate busy-pane response", async () => {
   let attempts = 0;
   const run: CommandRunner = async () => {
