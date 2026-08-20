@@ -205,20 +205,20 @@ function registerTools(pi: ExtensionAPI, config: ExtensionConfig, getManager: ()
   pi.registerTool({
     name: "send_agent",
     label: "Send Agent",
-    description: "Send an assignment or follow-up to a temporary owned agent. A closed agent is resumed in a new Herdr tab.",
-    promptSnippet: "Send a follow-up to an owned agent, reopening it when needed",
+    description: "Send a message to a temporary owned agent. The message steers active work or starts the next assignment, reopening a closed agent when needed.",
+    promptSnippet: "Send guidance or a new assignment to an owned agent",
     promptGuidelines: [
-      "Use send_agent only for a bounded read-only assignment when reusing an owned agent's existing session context provides a material benefit.",
-      "Give each new assignment or materially expanded follow-up one requested result, relevant starting anchors, known constraints, a stopping condition, and the evidence the parent needs.",
+      "Use send_agent only for a bounded read-only message when reusing an owned agent's existing session context provides a material benefit.",
+      "A message sent during active work must guide its current scope. Give a new assignment or materially expanded follow-up one requested result, relevant starting anchors, known constraints, a stopping condition, and the evidence the parent needs.",
       "After start_agent or send_agent returns, continue useful independent work or finish the parent turn by default. Do not call wait_agents only to monitor completion.",
     ],
     parameters: Type.Object({
       name: Type.String({ description: "Owned agent task name" }),
-      message: Type.String({ description: "New assignment or follow-up" }),
+      message: Type.String({ description: "Guidance for active work or a new bounded assignment" }),
     }),
     async execute(_id, params, signal) {
       const record = await getManager().send(params.name, params.message, signal);
-      return toolResult(`Sent assignment ${record.assignment} to ${record.name}. Continue independent work or finish the parent turn; do not call wait_agents just to monitor completion.`, [record]);
+      return toolResult(`Sent message to ${record.name} for assignment ${record.assignment}. Continue independent work or finish the parent turn; do not call wait_agents just to monitor completion.`, [record]);
     },
   });
 

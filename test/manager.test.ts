@@ -14,6 +14,25 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+function abortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.reject(new Error("cancelled"));
+  return new Promise((resolve, reject) => {
+    const abort = () => reject(new Error("cancelled"));
+    signal.addEventListener("abort", abort, { once: true });
+    void promise.then(
+      (value) => {
+        signal.removeEventListener("abort", abort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener("abort", abort);
+        reject(error);
+      },
+    );
+  });
+}
+
 async function childSessionFile(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "pi-owned-session-"));
   const path = join(root, "child.jsonl");
@@ -41,7 +60,7 @@ function testConfig(): ExtensionConfig {
 }
 
 class FakeHerdr {
-  readonly settled = deferred<HerdrAgent>();
+  settled = deferred<HerdrAgent>();
   readonly closed: string[] = [];
   createCalls = 0;
   sessionFile = "";
@@ -58,9 +77,21 @@ class FakeHerdr {
   displayAgents: Array<{ paneId: string; name: string }> = [];
   reportFailure: Error | undefined;
   closeFailure: Error | undefined;
+  promptGate: Promise<void> | undefined;
+  promptStateSequence: number | undefined;
+  promptReportedStatus: "idle" | "working" | "blocked" = "idle";
+  promptError: Error | undefined;
+  promptAcceptedOnError = true;
+  ignoreWaitAbort = false;
+  waitForTurnGate: Promise<void> | undefined;
+  createGate: Promise<void> | undefined;
+  getAgentGate: Promise<void> | undefined;
+  waitCalls = 0;
+  waitForTurnCalls = 0;
 
   async createTab() {
     this.createCalls += 1;
+    if (this.createGate) await this.createGate;
     return { tabId: "w1:t2", paneId: "w1:p2" };
   }
   async waitForShell() {}
@@ -86,21 +117,40 @@ class FakeHerdr {
   }
   async prompt(_paneId?: string, message?: string) {
     if (message) this.prompts.push(message);
+    if (this.promptError && !this.promptAcceptedOnError) throw this.promptError;
     this.currentStatus = "working";
-    return { pane_id: "w1:p2", tab_id: "w1:t2", workspace_id: "w1", agent_status: "idle" as const };
+    if (this.promptError) throw this.promptError;
+    const gate = this.promptGate;
+    this.promptGate = undefined;
+    if (gate) await gate;
+    return {
+      pane_id: "w1:p2",
+      tab_id: "w1:t2",
+      workspace_id: "w1",
+      agent_status: this.promptReportedStatus,
+      state_change_seq: this.promptStateSequence,
+    };
   }
-  async wait() { return this.settled.promise; }
-  async waitForTurn(_paneId?: string, _baselineSequence?: number, _signal?: AbortSignal, options?: unknown) {
+  async wait(_paneId?: string, signal?: AbortSignal) {
+    this.waitCalls += 1;
+    return this.ignoreWaitAbort ? this.settled.promise : abortable(this.settled.promise, signal);
+  }
+  async waitForTurn(_paneId?: string, _baselineSequence?: number, signal?: AbortSignal, options?: unknown) {
+    this.waitForTurnCalls += 1;
     this.waitForTurnOptions = options;
     if (this.interruptWaitError) {
       if (this.interruptFailureStatus) this.currentStatus = this.interruptFailureStatus;
       this.gateReconciliation = true;
       throw this.interruptWaitError;
     }
+    const gate = this.waitForTurnGate;
+    this.waitForTurnGate = undefined;
+    if (gate) await abortable(gate, signal);
     this.currentStatus = "idle";
     return { pane_id: "w1:p2", tab_id: "w1:t2", workspace_id: "w1", agent_status: "idle" as const, state_change_seq: 2 };
   }
   async getAgent() {
+    if (this.getAgentGate) await this.getAgentGate;
     if (this.gateReconciliation && this.reconciliationGate) await this.reconciliationGate;
     return { pane_id: "w1:p2", tab_id: "w1:t2", workspace_id: "w1", agent_status: this.currentStatus, state_change_seq: 1, name: this.agentName };
   }
@@ -434,6 +484,378 @@ test("an unclaimed persistent result notifies the parent and keeps its tab", asy
   assert.deepEqual(fake.closed, []);
 });
 
+test("send steers active work without replacing its assignment, claims, or close behavior", async () => {
+  const fake = new FakeHerdr();
+  fake.sessionFile = await childSessionFile();
+  const notifications: OwnedAgentRecord[] = [];
+  const manager = new AgentManager(
+    fake as unknown as HerdrClient,
+    testConfig(),
+    "w1",
+    dirname(fake.sessionFile),
+    "parent",
+    { provider: "test", model: "test/model", thinking: "medium" },
+    { persist() {}, notify: (record) => notifications.push(record) },
+  );
+
+  await manager.start({ name: "review", identityName: "reviewer", task: "Review.", keepOpen: false, cwd: "/repo" });
+  fake.promptReportedStatus = "working";
+  const waiting = manager.wait(["review"]);
+  const steered = await manager.send("review", "Focus on lifecycle races.");
+
+  assert.equal(steered.assignment, 1);
+  assert.equal(steered.status, "working");
+  assert.deepEqual(fake.prompts, ["Review.", "Focus on lifecycle races."]);
+  assert.equal(fake.waitCalls, 2);
+  assert.equal(fake.waitForTurnCalls, 0);
+  assert.deepEqual(fake.closed, []);
+
+  fake.settled.resolve({
+    pane_id: "w1:p2",
+    tab_id: "w1:t2",
+    workspace_id: "w1",
+    agent_status: "done",
+    agent_session: { value: fake.activeSessionFile },
+  });
+  const [result] = await waiting;
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(result.assignment, 1);
+  assert.equal(result.lastResult, "Finished review.");
+  assert.deepEqual(notifications, []);
+  assert.deepEqual(fake.closed, ["w1:t2"]);
+});
+
+test("send keeps settlement paused until a racing message has a completion watcher", async () => {
+  const fake = new FakeHerdr();
+  fake.sessionFile = await childSessionFile();
+  const notifications: OwnedAgentRecord[] = [];
+  const manager = new AgentManager(
+    fake as unknown as HerdrClient,
+    testConfig(),
+    "w1",
+    dirname(fake.sessionFile),
+    "parent",
+    { provider: "test", model: "test/model", thinking: "medium" },
+    { persist() {}, notify: (record) => notifications.push(record) },
+  );
+
+  await manager.start({ name: "review", identityName: "reviewer", task: "Review.", keepOpen: true, cwd: "/repo" });
+  const promptGate = deferred<void>();
+  const continuation = deferred<void>();
+  fake.promptGate = promptGate.promise;
+  fake.promptStateSequence = 1;
+  fake.waitForTurnGate = continuation.promise;
+
+  const sending = manager.send("review", "Include the late guidance.");
+  await new Promise((resolve) => setImmediate(resolve));
+  fake.settled.resolve({
+    pane_id: "w1:p2",
+    tab_id: "w1:t2",
+    workspace_id: "w1",
+    agent_status: "done",
+    agent_session: { value: fake.activeSessionFile },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(notifications.length, 0);
+
+  promptGate.resolve();
+  const sent = await sending;
+  assert.equal(sent.assignment, 1);
+  assert.equal(notifications.length, 0);
+
+  continuation.resolve();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(notifications.length, 1);
+  assert.equal(notifications[0].assignment, 1);
+});
+
+test("send fences a watcher whose Herdr wait resolved just before steering", async () => {
+  const fake = new FakeHerdr();
+  fake.sessionFile = await childSessionFile();
+  fake.ignoreWaitAbort = true;
+  const manager = new AgentManager(
+    fake as unknown as HerdrClient,
+    testConfig(),
+    "w1",
+    dirname(fake.sessionFile),
+    "parent",
+    { provider: "test", model: "test/model", thinking: "medium" },
+    { persist() {}, notify() {} },
+  );
+
+  await manager.start({ name: "review", identityName: "reviewer", task: "Review.", keepOpen: false, cwd: "/repo" });
+  const continuation = deferred<void>();
+  fake.promptStateSequence = 1;
+  fake.waitForTurnGate = continuation.promise;
+  fake.settled.resolve({ pane_id: "w1:p2", tab_id: "w1:t2", workspace_id: "w1", agent_status: "done" });
+
+  const sent = await manager.send("review", "Late guidance.");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(sent.assignment, 1);
+  assert.equal(manager.getRecords()[0].status, "working");
+  assert.deepEqual(fake.closed, []);
+
+  continuation.resolve();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(fake.closed, ["w1:t2"]);
+});
+
+test("send serializes messages and excludes interrupt and close while submitting", async () => {
+  const fake = new FakeHerdr();
+  fake.sessionFile = await childSessionFile();
+  const manager = new AgentManager(
+    fake as unknown as HerdrClient,
+    testConfig(),
+    "w1",
+    dirname(fake.sessionFile),
+    "parent",
+    { provider: "test", model: "test/model", thinking: "medium" },
+    { persist() {}, notify() {} },
+  );
+
+  await manager.start({ name: "review", identityName: "reviewer", task: "Review.", keepOpen: true, cwd: "/repo" });
+  const gate = deferred<void>();
+  fake.promptGate = gate.promise;
+  const first = manager.send("review", "First guidance.");
+  await new Promise((resolve) => setImmediate(resolve));
+
+  await assert.rejects(manager.send("review", "Second guidance."), /already receiving a message/);
+  await assert.rejects(manager.interrupt("review"), /receiving a message/);
+  await assert.rejects(manager.close("review"), /receiving a message/);
+
+  gate.resolve();
+  const sent = await first;
+  assert.equal(sent.assignment, 1);
+});
+
+test("shutdown prevents an in-flight send from installing a new watcher", async () => {
+  const fake = new FakeHerdr();
+  fake.sessionFile = await childSessionFile();
+  const manager = new AgentManager(
+    fake as unknown as HerdrClient,
+    testConfig(),
+    "w1",
+    dirname(fake.sessionFile),
+    "parent",
+    { provider: "test", model: "test/model", thinking: "medium" },
+    { persist() {}, notify() {} },
+  );
+
+  await manager.start({ name: "review", identityName: "reviewer", task: "Review.", keepOpen: true, cwd: "/repo" });
+  const gate = deferred<void>();
+  fake.promptGate = gate.promise;
+  const sending = manager.send("review", "Guidance during shutdown.");
+  await new Promise((resolve) => setImmediate(resolve));
+  const shuttingDown = manager.shutdown();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  gate.resolve();
+  await assert.rejects(sending, /parent session is shutting down/);
+  await shuttingDown;
+  assert.equal(manager.getRecords()[0].status, "interrupted");
+});
+
+test("shutdown prevents new-assignment failure recovery from installing a watcher", async () => {
+  const fake = new FakeHerdr();
+  fake.sessionFile = await childSessionFile();
+  const manager = new AgentManager(
+    fake as unknown as HerdrClient,
+    testConfig(),
+    "w1",
+    dirname(fake.sessionFile),
+    "parent",
+    { provider: "test", model: "test/model", thinking: "medium" },
+    { persist() {}, notify() {} },
+  );
+
+  await manager.start({ name: "review", identityName: "reviewer", task: "Review.", keepOpen: true, cwd: "/repo" });
+  fake.settled.resolve({ pane_id: "w1:p2", tab_id: "w1:t2", workspace_id: "w1", agent_status: "done" });
+  await new Promise((resolve) => setImmediate(resolve));
+  fake.currentStatus = "idle";
+  fake.settled = deferred<HerdrAgent>();
+
+  const gate = deferred<void>();
+  fake.promptGate = gate.promise;
+  const sending = manager.send("review", "New work during shutdown.");
+  await new Promise((resolve) => setImmediate(resolve));
+  const shuttingDown = manager.shutdown();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  gate.resolve();
+  await assert.rejects(sending, /parent session is shutting down/);
+  await shuttingDown;
+  assert.equal(manager.getRecords()[0].status, "interrupted");
+  assert.equal(manager.getRecords()[0].paneId, undefined);
+  assert.deepEqual(await manager.wait(["review"]), manager.getRecords());
+});
+
+test("wait and collect reject the gap while a new assignment is being submitted", async () => {
+  const fake = new FakeHerdr();
+  fake.sessionFile = await childSessionFile();
+  const manager = new AgentManager(
+    fake as unknown as HerdrClient,
+    testConfig(),
+    "w1",
+    dirname(fake.sessionFile),
+    "parent",
+    { provider: "test", model: "test/model", thinking: "medium" },
+    { persist() {}, notify() {} },
+  );
+
+  await manager.start({ name: "review", identityName: "reviewer", task: "Review.", keepOpen: true, cwd: "/repo" });
+  fake.settled.resolve({ pane_id: "w1:p2", tab_id: "w1:t2", workspace_id: "w1", agent_status: "done" });
+  await new Promise((resolve) => setImmediate(resolve));
+  fake.currentStatus = "idle";
+  fake.settled = deferred<HerdrAgent>();
+
+  const gate = deferred<void>();
+  fake.promptGate = gate.promise;
+  const sending = manager.send("review", "Next assignment.");
+  await new Promise((resolve) => setImmediate(resolve));
+
+  await assert.rejects(manager.wait(["review"]), /receiving a new assignment/);
+  assert.throws(() => manager.collect(["review"]), /receiving a new assignment/);
+
+  gate.resolve();
+  const sent = await sending;
+  assert.equal(sent.assignment, 2);
+  fake.settled.resolve({ pane_id: "w1:p2", tab_id: "w1:t2", workspace_id: "w1", agent_status: "done" });
+});
+
+test("collect rejects an old assignment while a closed agent is reopening", async () => {
+  const fake = new FakeHerdr();
+  fake.sessionFile = await childSessionFile();
+  const manager = new AgentManager(
+    fake as unknown as HerdrClient,
+    testConfig(),
+    "w1",
+    dirname(fake.sessionFile),
+    "parent",
+    { provider: "test", model: "test/model", thinking: "medium" },
+    { persist() {}, notify() {} },
+  );
+  await manager.restore([{
+    name: "review",
+    identity: "reviewer",
+    keepOpen: true,
+    status: "closed",
+    sessionFile: fake.sessionFile,
+    cwd: "/repo",
+    assignment: 1,
+    completedAssignment: 1,
+    lastTask: "Previous.",
+    updatedAt: Date.now(),
+  }]);
+  const gate = deferred<void>();
+  fake.createGate = gate.promise;
+
+  const sending = manager.send("review", "Resume with new work.");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.throws(() => manager.collect(["review"]), /receiving a new assignment/);
+
+  gate.resolve();
+  const sent = await sending;
+  assert.equal(sent.assignment, 2);
+});
+
+test("automatic close reserves the agent against a racing send", async () => {
+  const fake = new FakeHerdr();
+  fake.sessionFile = await childSessionFile();
+  const manager = new AgentManager(
+    fake as unknown as HerdrClient,
+    testConfig(),
+    "w1",
+    dirname(fake.sessionFile),
+    "parent",
+    { provider: "test", model: "test/model", thinking: "medium" },
+    { persist() {}, notify() {} },
+  );
+
+  await manager.start({ name: "review", identityName: "reviewer", task: "Review.", keepOpen: false, cwd: "/repo" });
+  const closeGate = deferred<void>();
+  fake.getAgentGate = closeGate.promise;
+  fake.settled.resolve({ pane_id: "w1:p2", tab_id: "w1:t2", workspace_id: "w1", agent_status: "done" });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  await assert.rejects(manager.send("review", "Too late."), /is closing/);
+  closeGate.resolve();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(manager.getRecords()[0].status, "closed");
+});
+
+test("explicit close reserves the agent against a racing send", async () => {
+  const fake = new FakeHerdr();
+  fake.sessionFile = await childSessionFile();
+  const manager = new AgentManager(
+    fake as unknown as HerdrClient,
+    testConfig(),
+    "w1",
+    dirname(fake.sessionFile),
+    "parent",
+    { provider: "test", model: "test/model", thinking: "medium" },
+    { persist() {}, notify() {} },
+  );
+
+  await manager.start({ name: "review", identityName: "reviewer", task: "Review.", keepOpen: true, cwd: "/repo" });
+  const closeGate = deferred<void>();
+  fake.getAgentGate = closeGate.promise;
+  const closing = manager.close("review");
+  await new Promise((resolve) => setImmediate(resolve));
+
+  await assert.rejects(manager.send("review", "Do not race close."), /is closing/);
+  closeGate.resolve();
+  await closing;
+});
+
+test("new assignment prompt failures remain tracked until their acceptance is reconciled", async () => {
+  const fake = new FakeHerdr();
+  fake.sessionFile = await childSessionFile();
+  const notifications: OwnedAgentRecord[] = [];
+  const manager = new AgentManager(
+    fake as unknown as HerdrClient,
+    testConfig(),
+    "w1",
+    dirname(fake.sessionFile),
+    "parent",
+    { provider: "test", model: "test/model", thinking: "medium" },
+    { persist() {}, notify: (record) => notifications.push(record) },
+  );
+
+  await manager.start({ name: "review", identityName: "reviewer", task: "Review.", keepOpen: true, cwd: "/repo" });
+  fake.settled.resolve({ pane_id: "w1:p2", tab_id: "w1:t2", workspace_id: "w1", agent_status: "done" });
+  await new Promise((resolve) => setImmediate(resolve));
+  fake.currentStatus = "idle";
+  fake.settled = deferred<HerdrAgent>();
+
+  const firstReconciliation = deferred<void>();
+  fake.waitForTurnGate = firstReconciliation.promise;
+  fake.promptError = new Error("pre-dispatch failure");
+  fake.promptAcceptedOnError = false;
+  await assert.rejects(manager.send("review", "Not confirmed."), /pre-dispatch failure/);
+  assert.equal(manager.getRecords()[0].assignment, 2);
+  assert.equal(manager.getRecords()[0].status, "working");
+
+  fake.promptError = undefined;
+  firstReconciliation.resolve();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(notifications.at(-1)?.assignment, 2);
+
+  fake.currentStatus = "idle";
+  const secondReconciliation = deferred<void>();
+  fake.waitForTurnGate = secondReconciliation.promise;
+  fake.promptError = new Error("response lost after acceptance");
+  fake.promptAcceptedOnError = true;
+  await assert.rejects(manager.send("review", "Possibly accepted."), /response lost after acceptance/);
+  assert.equal(manager.getRecords()[0].assignment, 3);
+  assert.equal(manager.getRecords()[0].status, "working");
+
+  fake.promptError = undefined;
+  secondReconciliation.resolve();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(notifications.at(-1)?.assignment, 3);
+});
+
 test("interrupt settles the assignment without closing and permits a follow-up", async () => {
   const fake = new FakeHerdr();
   fake.sessionFile = await childSessionFile();
@@ -465,7 +887,7 @@ test("interrupt settles the assignment without closing and permits a follow-up",
   assert.deepEqual(fake.closed, []);
 });
 
-test("a failed interrupt retains the active assignment lock", async () => {
+test("a failed interrupt retains the active assignment for steering", async () => {
   const fake = new FakeHerdr();
   fake.sessionFile = await childSessionFile();
   const manager = new AgentManager(
@@ -481,8 +903,9 @@ test("a failed interrupt retains the active assignment lock", async () => {
   await manager.start({ name: "review", identityName: "reviewer", task: "Review.", keepOpen: true, cwd: "/repo" });
   fake.interruptWaitError = new Error("interrupt timeout");
   await assert.rejects(manager.interrupt("review"), /interrupt timeout/);
-  await assert.rejects(manager.send("review", "Do not overlap."), /already working/);
-  assert.equal(manager.getRecords()[0].status, "working");
+  const steered = await manager.send("review", "Continue without interrupting.");
+  assert.equal(steered.assignment, 1);
+  assert.equal(steered.status, "working");
 });
 
 test("a failed interrupt preserves a blocked agent's usable state", async () => {
@@ -597,7 +1020,8 @@ test("failed interrupt reconciliation follows the current child state", async ()
 
   await assert.rejects(manager.interrupt("review"), /transport failure/);
   assert.equal(manager.getRecords()[0].status, "working");
-  await assert.rejects(manager.send("review", "Do not overlap."), /already working/);
+  const steered = await manager.send("review", "Continue after reconciliation.");
+  assert.equal(steered.assignment, 1);
 });
 
 test("parallel reopens reserve names and capacity before tab creation", async () => {
@@ -638,7 +1062,7 @@ test("parallel reopens reserve names and capacity before tab creation", async ()
   await manager.close("first");
   const sameFirst = manager.send("first", "Resume once.");
   const sameSecond = manager.send("first", "Resume twice.");
-  await assert.rejects(sameSecond, /already reopening/);
+  await assert.rejects(sameSecond, /already receiving a message/);
   await sameFirst;
   assert.equal(fake.createCalls, 2);
 });

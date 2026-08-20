@@ -12,6 +12,7 @@ const INTERRUPT_SETTLE_TIMEOUT_MS = 5_000;
 interface TurnState {
   assignment: number;
   claims: Set<string>;
+  generation: number;
   controller: AbortController;
   promise: Promise<OwnedAgentRecord>;
   resolve: (record: OwnedAgentRecord) => void;
@@ -40,6 +41,8 @@ export class AgentManager {
   private readonly turns = new Map<string, TurnState>();
   private readonly collections = new Map<string, OwnedAgentCollection>();
   private readonly interruptions = new Set<string>();
+  private readonly sends = new Set<string>();
+  private readonly closures = new Set<string>();
   private stopped = false;
 
   constructor(
@@ -184,7 +187,7 @@ export class AgentManager {
       record.status = "working";
       record.updatedAt = Date.now();
       this.persist();
-      this.watch(record, prompted.state_change_seq);
+      this.watchAfterPrompt(record, prompted);
       return cloneRecord(record);
     } catch (error) {
       if (tabId) {
@@ -207,43 +210,82 @@ export class AgentManager {
   async send(name: string, message: string, signal?: AbortSignal): Promise<OwnedAgentRecord> {
     this.assertRunning();
     const record = this.requireRecord(name);
-    if (!message.trim()) throw new Error("Message must not be empty.");
-    let metadataReported = false;
-    if (record.status === "failed" && record.paneId) {
-      await this.reconcileFailedRecord(record, signal);
-      metadataReported = true;
-    }
-    if (!metadataReported && record.paneId && record.status !== "closed" && record.status !== "starting") {
-      await this.herdr.reportDisplayAgent(record.paneId, record.name, signal);
-    }
-    if (record.status === "closed" || !record.paneId) {
-      await this.reloadConfig();
-      await this.reopen(record, signal);
-    }
-    if (this.interruptions.has(name)) {
-      throw new Error(`Agent ${name} is being interrupted. Wait for the interrupt operation to finish.`);
-    }
-    if (this.turns.has(name) || record.status === "working") {
-      throw new Error(`Agent ${name} is already working. Wait for or interrupt its current assignment first.`);
-    }
+    const text = message.trim();
+    if (!text) throw new Error("Message must not be empty.");
+    if (this.sends.has(name)) throw new Error(`Agent ${name} is already receiving a message.`);
+    if (this.closures.has(name)) throw new Error(`Agent ${name} is closing.`);
+    this.sends.add(name);
+    const activeTurn = this.turns.get(name);
+    let restoreActiveWatch = Boolean(activeTurn);
+    let activeBaselineSequence: number | undefined;
+    if (activeTurn) this.pauseTurn(activeTurn);
 
-    const previous = cloneRecord(record);
-    record.assignment += 1;
-    record.lastTask = message;
-    record.lastResult = undefined;
-    record.lastError = undefined;
-    record.status = "working";
-    record.updatedAt = Date.now();
-    this.persist();
     try {
-      const prompted = await this.herdr.prompt(record.paneId!, message.trim(), signal);
-      this.watch(record, prompted.state_change_seq);
-    } catch (error) {
-      Object.assign(record, previous, { updatedAt: Date.now() });
+      let metadataReported = false;
+      if (record.status === "failed" && record.paneId) {
+        await this.reconcileFailedRecord(record, signal);
+        metadataReported = true;
+      }
+      if (!metadataReported && record.paneId && record.status !== "closed" && record.status !== "starting") {
+        await this.herdr.reportDisplayAgent(record.paneId, record.name, signal);
+      }
+      this.assertRunning();
+      if (this.closures.has(name)) throw new Error(`Agent ${name} is closing.`);
+      if (record.status === "closed" || !record.paneId) {
+        await this.reloadConfig();
+        await this.reopen(record, signal);
+      }
+      this.assertRunning();
+      if (this.interruptions.has(name)) {
+        throw new Error(`Agent ${name} is being interrupted. Wait for the interrupt operation to finish.`);
+      }
+
+      if (activeTurn) {
+        if (this.turns.get(name) !== activeTurn || activeTurn.assignment !== record.assignment) {
+          throw new Error(`Agent ${name} has inconsistent active assignment tracking.`);
+        }
+        const baseline = await this.herdr.getAgent(record.paneId!, signal);
+        activeBaselineSequence = baseline.state_change_seq;
+        this.assertRunning();
+        const prompted = await this.herdr.prompt(record.paneId!, text, signal);
+        this.assertRunning();
+        record.status = "working";
+        record.updatedAt = Date.now();
+        this.persist();
+        this.watchAfterPrompt(record, prompted, activeTurn);
+        restoreActiveWatch = false;
+        return cloneRecord(record);
+      }
+      if (record.status === "working") {
+        throw new Error(`Agent ${name} is working without a tracked assignment.`);
+      }
+
+      const baseline = await this.herdr.getAgent(record.paneId!, signal);
+      this.assertRunning();
+      record.assignment += 1;
+      record.lastTask = text;
+      record.lastResult = undefined;
+      record.lastError = undefined;
+      record.status = "working";
+      record.updatedAt = Date.now();
       this.persist();
+      try {
+        const prompted = await this.herdr.prompt(record.paneId!, text, signal);
+        this.assertRunning();
+        this.watchAfterPrompt(record, prompted);
+      } catch (error) {
+        this.reconcileNewAssignmentPromptFailure(record, baseline.state_change_seq, error);
+        throw error;
+      }
+      return cloneRecord(record);
+    } catch (error) {
+      if (activeTurn && restoreActiveWatch && !this.stopped && this.turns.get(name) === activeTurn) {
+        this.watch(record, activeBaselineSequence, activeTurn);
+      }
       throw error;
+    } finally {
+      this.sends.delete(name);
     }
-    return cloneRecord(record);
   }
 
   collect(names: string[]): OwnedAgentCollection {
@@ -255,6 +297,9 @@ export class AgentManager {
     for (const record of records) {
       const isSettled = record.completedAssignment === record.assignment;
       const turn = this.turns.get(record.name);
+      if (this.sends.has(record.name) && !turn) {
+        throw new Error(`Owned agent ${record.name} is receiving a new assignment.`);
+      }
       if (!isSettled && (!turn || turn.assignment !== record.assignment)) {
         throw new Error(`Owned agent ${record.name} has no active or completed current assignment to collect.`);
       }
@@ -291,6 +336,11 @@ export class AgentManager {
   ): Promise<OwnedAgentRecord[]> {
     const selected = names?.length ? names.map((name) => this.requireRecord(name)) : [...this.records.values()].filter((record) => record.status === "working");
     const selections = selected.map((record) => ({ record, turn: this.turns.get(record.name) }));
+    for (const { record, turn } of selections) {
+      if (this.sends.has(record.name) && !turn) {
+        throw new Error(`Owned agent ${record.name} is receiving a new assignment.`);
+      }
+    }
     const completed = new Set(selections.filter(({ turn }) => !turn).map(({ record }) => record.name));
     const reportProgress = () => onProgress?.({
       selected: selections.map(({ record }) => record.name),
@@ -330,19 +380,21 @@ export class AgentManager {
   async interrupt(name: string, signal?: AbortSignal): Promise<OwnedAgentRecord> {
     this.assertRunning();
     const record = this.requireLiveRecord(name);
+    if (this.sends.has(name)) throw new Error(`Owned agent ${name} is receiving a message.`);
+    if (this.closures.has(name)) throw new Error(`Owned agent ${name} is closing.`);
     if (this.interruptions.has(name)) throw new Error(`Owned agent ${name} is already being interrupted.`);
     const assignment = record.assignment;
     const paneId = record.paneId!;
+    const turn = this.turns.get(name);
+    let restoreTurn = Boolean(turn);
     this.interruptions.add(name);
+    if (turn) this.pauseTurn(turn);
 
     try {
       const baseline = await this.herdr.getAgent(paneId, signal);
       if (baseline.agent_status !== "working" && baseline.agent_status !== "blocked" && baseline.agent_status !== "unknown") {
         throw new Error(`Owned agent ${name} is not currently working or blocked.`);
       }
-      const turn = this.turns.get(name);
-      turn?.controller.abort();
-
       try {
         await this.herdr.interrupt(paneId, signal);
         await this.herdr.waitForTurn(paneId, baseline.state_change_seq ?? 0, signal, {
@@ -353,6 +405,7 @@ export class AgentManager {
           throw new Error(`Owned agent ${name} changed assignments while the interrupt was settling.`);
         }
         this.turns.delete(name);
+        restoreTurn = false;
         record.status = "interrupted";
         record.lastResult = `Assignment ${assignment} was interrupted.`;
         record.lastError = undefined;
@@ -379,21 +432,34 @@ export class AgentManager {
         } else {
           record.status = "working";
           this.persist();
-          if (!this.stopped) this.watch(record, undefined, turn);
+          if (!this.stopped) {
+            this.watch(record, undefined, turn);
+            restoreTurn = false;
+          }
         }
         throw error;
       }
     } finally {
+      if (turn && restoreTurn && !this.stopped && this.turns.get(name) === turn) {
+        this.watch(record, undefined, turn);
+      }
       this.interruptions.delete(name);
     }
   }
 
   async close(name: string): Promise<OwnedAgentRecord> {
     const record = this.requireRecord(name);
+    if (this.sends.has(name)) throw new Error(`Owned agent ${name} is receiving a message.`);
     if (this.interruptions.has(name)) throw new Error(`Owned agent ${name} is being interrupted.`);
+    if (this.closures.has(name)) throw new Error(`Owned agent ${name} is already closing.`);
     if (record.status === "starting") throw new Error(`Owned agent ${name} is still starting or reopening.`);
-    await this.closeRecord(record, record.status === "working" ? "interrupted" : "closed");
-    return cloneRecord(record);
+    this.closures.add(name);
+    try {
+      await this.closeRecord(record, record.status === "working" ? "interrupted" : "closed");
+      return cloneRecord(record);
+    } finally {
+      this.closures.delete(name);
+    }
   }
 
   suspend(): void {
@@ -408,6 +474,19 @@ export class AgentManager {
       if (!record.paneId || record.status === "closed") return;
       await this.closeRecord(record, record.status === "working" ? "interrupted" : "closed").catch(() => undefined);
     }));
+  }
+
+  private reconcileNewAssignmentPromptFailure(
+    record: OwnedAgentRecord,
+    baselineSequence: number | undefined,
+    promptError: unknown,
+  ): void {
+    if (this.stopped) return;
+    record.status = "working";
+    record.lastError = `Message submission failed after the child may have accepted it: ${(promptError as Error).message}`;
+    record.updatedAt = Date.now();
+    this.persist();
+    this.watch(record, baselineSequence);
   }
 
   private async reconcileFailedRecord(record: OwnedAgentRecord, signal?: AbortSignal): Promise<void> {
@@ -511,12 +590,23 @@ export class AgentManager {
     if (this.callbacks.reloadConfig) this.config = await this.callbacks.reloadConfig();
   }
 
+  private watchAfterPrompt(record: OwnedAgentRecord, prompted: { agent_status?: string; state_change_seq?: number }, turn?: TurnState): void {
+    const stillWorking = prompted.agent_status === "working" || prompted.agent_status === "unknown";
+    this.watch(record, stillWorking ? undefined : prompted.state_change_seq, turn);
+  }
+
+  private pauseTurn(turn: TurnState): void {
+    turn.generation += 1;
+    turn.controller.abort();
+  }
+
   private watch(record: OwnedAgentRecord, baselineSequence?: number, existingTurn?: TurnState): void {
     const oldTurn = this.turns.get(record.name);
-    if (oldTurn && oldTurn !== existingTurn) oldTurn.controller.abort();
+    if (oldTurn && oldTurn !== existingTurn) this.pauseTurn(oldTurn);
     const controller = new AbortController();
     let turn = existingTurn;
     if (turn) {
+      turn.controller.abort();
       turn.controller = controller;
     } else {
       let resolve!: (record: OwnedAgentRecord) => void;
@@ -524,22 +614,24 @@ export class AgentManager {
       turn = {
         assignment: record.assignment,
         claims: new Set(this.collectionClaims(record.name, record.assignment)),
+        generation: 0,
         controller,
         promise,
         resolve,
       };
     }
+    const generation = ++turn.generation;
     this.turns.set(record.name, turn);
 
     const settled = baselineSequence === undefined
       ? this.herdr.wait(record.paneId!, controller.signal)
       : this.herdr.waitForTurn(record.paneId!, baselineSequence, controller.signal);
     void settled.then(async (agent) => {
-      if (this.turns.get(record.name) !== turn) return;
+      if (this.stopped || this.turns.get(record.name) !== turn || turn.generation !== generation) return;
       if (agent.agent_status === "blocked") await this.settleBlocked(record, turn);
       else await this.settleCompleted(record, turn);
     }).catch((error) => {
-      if (controller.signal.aborted || this.stopped) return;
+      if (controller.signal.aborted || this.stopped || turn.generation !== generation) return;
       record.status = "failed";
       record.lastError = (error as Error).message;
       record.lastResult = `Agent ${record.name} failed: ${record.lastError}`;
@@ -572,11 +664,17 @@ export class AgentManager {
     }
     record.completedAssignment = record.assignment;
     record.updatedAt = Date.now();
+    const shouldClose = !record.keepOpen;
+    if (shouldClose) this.closures.add(record.name);
     if (turn) this.finishTurn(record, turn);
     else this.finishSettledRecord(record);
 
-    if (!record.keepOpen) {
-      await this.closeRecord(record, record.status === "failed" ? "failed" : "closed");
+    if (shouldClose) {
+      try {
+        await this.closeRecord(record, record.status === "failed" ? "failed" : "closed");
+      } finally {
+        this.closures.delete(record.name);
+      }
     }
   }
 
@@ -643,6 +741,8 @@ export class AgentManager {
   }
 
   private async closeRecord(record: OwnedAgentRecord, status: "closed" | "interrupted" | "failed"): Promise<void> {
+    const turn = this.turns.get(record.name);
+    if (turn) this.pauseTurn(turn);
     if (record.paneId) {
       try {
         const agent = await this.herdr.getAgent(record.paneId);
@@ -658,11 +758,10 @@ export class AgentManager {
         record.lastError = `Refused to close unverified owned tab ${record.tabId ?? "(unknown)"}: ${(error as Error).message}`;
         record.updatedAt = Date.now();
         this.persist();
+        if (turn && !this.stopped && this.turns.get(record.name) === turn) this.watch(record, undefined, turn);
         throw error;
       }
     }
-    const turn = this.turns.get(record.name);
-    turn?.controller.abort();
     this.turns.delete(record.name);
     if (record.tabId) {
       try {

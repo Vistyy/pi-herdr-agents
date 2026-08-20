@@ -33,7 +33,7 @@ It does not fall back to unmanaged child processes.
 Install a released version from GitHub:
 
 ```sh
-pi install git:github.com/Vistyy/pi-herdr-agents@v0.1.15
+pi install git:github.com/Vistyy/pi-herdr-agents@v0.1.16
 ```
 
 Install a local checkout:
@@ -203,6 +203,8 @@ A complete result, partial evidence with a limitation, and a clear stopped repor
 The assignment user message contains the task-specific scope, acceptance criteria, stopping condition, and output requirements.
 Set `keep_open: true` when starting an agent to keep it as a persistent collaborator.
 
+`send_agent` steers an active assignment and keeps its existing assignment number, claims, and completion watcher.
+If the previous assignment has settled, the message starts the next assignment instead.
 `interrupt_agent` sends Pi's Escape interrupt key, then waits for settlement with a bounded timeout.
 If Herdr still reports the child as working or unknown, the extension preserves the tab and session, retains the assignment lock, and continues reconciliation in the background.
 Sending a message to a closed agent resumes its Pi session in a new tab.
