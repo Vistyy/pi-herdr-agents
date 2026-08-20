@@ -174,16 +174,15 @@ function registerTools(pi: ExtensionAPI, config: ExtensionConfig, getManager: ()
   pi.registerTool({
     name: "start_agent",
     label: "Start Agent",
-    description: `Start an owned Pi agent in a new tab in the current Herdr workspace. Returns after the agent accepts its assignment. Available identities:\n${identityCatalog}`,
-    promptSnippet: "Start an owned Pi agent in a new Herdr tab",
+    description: `Start a temporary owned Pi agent in a new tab in the current Herdr workspace. Returns after the agent accepts its assignment. Available identities:\n${identityCatalog}`,
+    promptSnippet: "Start a temporary Pi agent in a new Herdr tab",
     promptGuidelines: [
-      "Default to start_agent for each separable bounded deliverable before gathering its detailed working context.",
-      "If completing a separable deliverable requires file reads, searches, commands, investigation, implementation, review, or verification, use start_agent even when the work is small or tightly coupled to the parent decision.",
-      "Use parent-session tools for outcome framing, authoritative project context, cross-cutting synthesis, conflict resolution, and checking material result evidence. Delegate the bounded execution and detailed working context.",
-      "Keep outcome framing, cross-cutting decisions, synthesis, and user communication in the parent session.",
+      "Use start_agent only for a bounded read-only deliverable when delegation materially reduces parent context load, enables useful independent progress, or provides justified corroboration.",
+      "Give each assignment one requested result, relevant starting anchors, known constraints, a stopping condition, and the evidence the parent needs.",
+      "Keep implementation, mutation, outcome framing, cross-cutting decisions, synthesis, and user communication in the parent session.",
       "After start_agent or send_agent returns, continue useful independent work or finish the parent turn by default. Do not call wait_agents only to monitor completion.",
-      "While a delegated scope is active, do not gather the same evidence or perform the same work in the parent session. After completion, check only the material evidence needed to integrate the result.",
-      "Do not assign overlapping repository write scopes to concurrent agents.",
+      "Do not duplicate an active agent's scope. Give concurrent agents non-overlapping scopes unless independent corroboration is intentional.",
+      "After completion, check the material evidence needed to integrate the result.",
     ],
     parameters: Type.Object({
       name: Type.String({ description: "Unique task name matching [a-z][a-z0-9_-]{0,28}" }),
@@ -206,10 +205,11 @@ function registerTools(pi: ExtensionAPI, config: ExtensionConfig, getManager: ()
   pi.registerTool({
     name: "send_agent",
     label: "Send Agent",
-    description: "Send a new assignment or follow-up to an owned agent. A closed agent is resumed in a new Herdr tab.",
+    description: "Send an assignment or follow-up to a temporary owned agent. A closed agent is resumed in a new Herdr tab.",
     promptSnippet: "Send a follow-up to an owned agent, reopening it when needed",
     promptGuidelines: [
-      "Use send_agent for follow-up work that needs an owned agent's existing session context.",
+      "Use send_agent only for a bounded read-only assignment when reusing an owned agent's existing session context provides a material benefit.",
+      "Give each new assignment or materially expanded follow-up one requested result, relevant starting anchors, known constraints, a stopping condition, and the evidence the parent needs.",
       "After start_agent or send_agent returns, continue useful independent work or finish the parent turn by default. Do not call wait_agents only to monitor completion.",
     ],
     parameters: Type.Object({

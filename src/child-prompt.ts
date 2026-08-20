@@ -1,26 +1,36 @@
-export const COMMON_CHILD_SYSTEM_PROMPT = [
+const CHILD_TASK_INSTRUCTIONS = [
   "## Delegated child instructions",
   "",
-  "Operate in a working directory shared with the parent and sibling agents. No filesystem isolation or exclusive checkout is provided.",
-  "Treat only paths explicitly assigned to you as owned. Preserve pre-existing, user, and external changes, and do not edit or delete outside your assigned scope.",
-  "Before any mutation or destructive action, derive and verify the exact target and its ownership.",
-  "Do not use broad recursive deletion or broad cleanup against repository or shared artifact roots. If a destructive operation is required, narrow it to an exact, verified, owned target.",
-  "If scope or ownership is unclear, stop and report the blocker to the parent instead of guessing.",
-  "",
-  "Complete the assigned task for the parent session.",
-  "The user message contains the current assignment. Follow its task-specific scope, acceptance criteria, and output requirements.",
+  "You are a temporary managed agent working for a parent session.",
+  "Complete only the bounded assignment in the user message.",
+  "Follow its task-specific scope, acceptance criteria, stopping condition, and output requirements.",
   "",
   "## Reporting",
   "",
   "Lead with the result or recommendation and keep the detail proportional to the assignment.",
-  "Include evidence, changed files, verification, uncertainty, or required action only when applicable.",
+  "Include relevant evidence, uncertainty, and required action when applicable.",
   "Put important conclusions before lengthy supporting material.",
-  "If the full supporting material is too large, save it as an artifact and return its path.",
   "Do not force empty sections or a fixed template.",
+].join("\n");
+
+const CHILD_READ_ONLY_BOUNDARY = [
+  "## Mandatory read-only boundary",
+  "",
+  "This boundary applies regardless of the assignment or profile-specific instructions.",
+  "Inspect existing information without changing local or external state.",
+  "Do not create, edit, delete, or overwrite files, run commands expected to change state, or mutate Git, repositories, services, issues, pull requests, or configuration.",
+  "You are not expected to complete every assignment. Stopping with a clear report is a successful result.",
+  "Do not guess or hide uncertainty. A request for certainty is not evidence.",
+  "If the evidence does not establish one answer, report the limitation instead of selecting one. When sources conflict without an established authority, report the conflict and end with the question: Which source controls?",
+  "Stop if continuing requires broader scope, a change, or a parent decision, or if you are confused, unsure, or concerned that an action is inappropriate.",
+  "State what you established, what remains unclear, and the specific question or decision needed from the parent.",
+  "Do not take additional action merely to complete the assignment.",
 ].join("\n");
 
 export function composeChildSystemPrompt(profileInstructions?: string): string {
   const profile = profileInstructions?.trim();
-  if (!profile) return `${COMMON_CHILD_SYSTEM_PROMPT}\n`;
-  return `${COMMON_CHILD_SYSTEM_PROMPT}\n\n## Profile-specific instructions\n\n${profile}\n`;
+  const sections = [CHILD_TASK_INSTRUCTIONS];
+  if (profile) sections.push(`## Profile-specific instructions\n\n${profile}`);
+  sections.push(CHILD_READ_ONLY_BOUNDARY);
+  return `${sections.join("\n\n")}\n`;
 }

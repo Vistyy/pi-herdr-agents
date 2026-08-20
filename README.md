@@ -186,17 +186,21 @@ This keeps parent-only delegation policy and controls out of child prompts.
 The extension registers the seven delegation tools above when at least one valid identity exists.
 
 Each owned agent opens in a new tab in the parent session's current Herdr workspace and uses the parent's working directory.
-The extension does not create Git worktrees or prevent writes.
-Its tool guidance makes delegation the default for separable bounded work that requires tool use, including small tasks and implementation.
-The parent retains outcome framing, authoritative project context, cross-cutting decisions, synthesis, evidence checks, and user communication.
-A delegated scope has one owner, and concurrent agents must not receive overlapping repository write scopes.
+The extension does not create Git worktrees or enforce read-only access.
+Its tool guidance delegates bounded read-only work only when doing so provides a material benefit.
+The parent retains implementation, mutation, outcome framing, cross-cutting decisions, synthesis, evidence checks, and user communication.
+A delegated investigation has one owner, and concurrent scopes do not overlap unless independent corroboration is intentional.
+Each assignment states one requested result, relevant starting anchors, known constraints, a stopping condition, and the evidence the parent needs.
 
 Default completion protocol: after `start_agent` or `send_agent` returns, do not call `wait_agents`.
 Continue useful independent work.
 If no independent work remains, finish the parent turn so the completion notification can resume it.
 A normal task agent closes after it reports its result.
-Every child receives a common appended system prompt with shared-directory safety and ownership rules and the generic result, evidence, and verification reporting contract.
-The assignment user message contains the task-specific scope, acceptance criteria, and output requirements.
+Every child receives a mandatory read-only boundary after any profile-specific instructions.
+It must stop and report when continuing requires a guess, hidden uncertainty, broader scope, mutation, or a parent decision.
+This includes asking which source controls when conflicting evidence has no established authority.
+A complete result, partial evidence with a limitation, and a clear stopped report are all valid outcomes.
+The assignment user message contains the task-specific scope, acceptance criteria, stopping condition, and output requirements.
 Set `keep_open: true` when starting an agent to keep it as a persistent collaborator.
 
 `interrupt_agent` sends Pi's Escape interrupt key, then waits for settlement with a bounded timeout.
@@ -237,12 +241,12 @@ Forked and unrelated Pi sessions do not adopt them.
 The extension resolves inherited resources before launch and passes explicit tool, extension, and skill lists to the child.
 The child disables automatic extension, skill, and prompt-template discovery so its launch cannot add resources outside those resolved lists.
 It still loads applicable repository `AGENTS.md` and `CLAUDE.md` context files.
-It uses Pi's default coding prompt, followed by the common appended system prompt and any profile-specific identity body.
-Frontmatter-only identities receive the common system prompt without profile-specific instructions.
-The actual assignment is sent as a user message after these system instructions.
+It uses Pi's default coding prompt, followed by the common task instructions, any profile-specific identity body, and the mandatory read-only boundary.
+Frontmatter-only identities omit only the profile-specific section.
+The assignment is sent separately as a user message.
 
 This controls Pi resources and provides prompt guidance, not operating-system access or filesystem enforcement.
-A child with shell access can still start processes permitted by the operating system.
+A child with shell access can still start processes permitted by the operating system, so the read-only boundary is not a security sandbox.
 
 ## Lifecycle
 
