@@ -690,7 +690,7 @@ test("shutdown prevents new-assignment failure recovery from installing a watche
   assert.deepEqual(await manager.wait(["review"]), manager.getRecords());
 });
 
-test("wait and collect reject the gap while a new assignment is being submitted", async () => {
+test("wait and batch registration reject the gap while a new assignment is being submitted", async () => {
   const fake = new FakeHerdr();
   fake.sessionFile = await childSessionFile();
   const manager = new AgentManager(
@@ -715,7 +715,7 @@ test("wait and collect reject the gap while a new assignment is being submitted"
   await new Promise((resolve) => setImmediate(resolve));
 
   await assert.rejects(manager.wait(["review"]), /receiving a new assignment/);
-  assert.throws(() => manager.collect(["review"]), /receiving a new assignment/);
+  assert.throws(() => manager.batch(manager.getRecords()), /receiving a new assignment/);
 
   gate.resolve();
   const sent = await sending;
@@ -723,7 +723,7 @@ test("wait and collect reject the gap while a new assignment is being submitted"
   fake.settled.resolve({ pane_id: "w1:p2", tab_id: "w1:t2", workspace_id: "w1", agent_status: "done" });
 });
 
-test("collect rejects an old assignment while a closed agent is reopening", async () => {
+test("batch registration rejects an old assignment while a closed agent is reopening", async () => {
   const fake = new FakeHerdr();
   fake.sessionFile = await childSessionFile();
   const manager = new AgentManager(
@@ -752,7 +752,7 @@ test("collect rejects an old assignment while a closed agent is reopening", asyn
 
   const sending = manager.send("review", "Resume with new work.");
   await new Promise((resolve) => setImmediate(resolve));
-  assert.throws(() => manager.collect(["review"]), /receiving a new assignment/);
+  assert.throws(() => manager.batch(manager.getRecords()), /receiving a new assignment/);
 
   gate.resolve();
   const sent = await sending;
@@ -1190,7 +1190,7 @@ function collectionManager(
   );
 }
 
-test("collect_agents includes already-settled mixed outcomes and claims individual notifications", async () => {
+test("a batch includes already-settled mixed outcomes and claims individual notifications", async () => {
   const fake = new MultiAgentHerdr();
   const claimed: string[] = [];
   const completed: OwnedAgentCollection[] = [];
@@ -1206,7 +1206,7 @@ test("collect_agents includes already-settled mixed outcomes and claims individu
   ];
   await manager.restore(records);
 
-  const collection = manager.collect(records.map((record) => record.name));
+  const collection = manager.batch(records);
 
   assert.equal(collection.notified, true);
   assert.deepEqual(claimed, ["ok", "blocked", "failed", "stopped"]);
@@ -1214,7 +1214,7 @@ test("collect_agents includes already-settled mixed outcomes and claims individu
   assert.deepEqual(completed[0].members.map((member) => member.result?.status), ["idle", "blocked", "failed", "interrupted"]);
 });
 
-test("collect_agents emits one notification for simultaneous completions and suppresses individuals", async () => {
+test("a batch emits one notification for simultaneous completions and suppresses individuals", async () => {
   const fake = new MultiAgentHerdr();
   const firstFile = await childSessionFile();
   const secondFile = await childSessionFile();
@@ -1230,7 +1230,7 @@ test("collect_agents emits one notification for simultaneous completions and sup
     ownedRecord({ name: "first", status: "working", paneId: "p1", sessionFile: firstFile }),
     ownedRecord({ name: "second", status: "working", paneId: "p2", sessionFile: secondFile }),
   ]);
-  manager.collect(["first", "second"]);
+  manager.batch(manager.getRecords());
 
   fake.settle("p1");
   fake.settle("p2");
@@ -1252,7 +1252,7 @@ test("a cancelled overlapping wait does not release an assignment from its colle
     notifyCollection: (collection) => completed.push(collection),
   });
   await manager.restore([ownedRecord({ name: "review", status: "working", paneId: "p1", sessionFile })]);
-  manager.collect(["review"]);
+  manager.batch(manager.getRecords());
   const controller = new AbortController();
   const waiting = manager.wait(["review"], controller.signal);
 
@@ -1307,7 +1307,7 @@ test("a pending collection survives manager reload and notifies after settlement
     },
   });
   await firstManager.restore([ownedRecord({ name: "review", status: "working", paneId: "p1", sessionFile })]);
-  firstManager.collect(["review"]);
+  firstManager.batch(firstManager.getRecords());
   firstManager.suspend();
 
   const secondFake = new MultiAgentHerdr();

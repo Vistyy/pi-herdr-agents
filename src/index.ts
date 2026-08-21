@@ -12,7 +12,7 @@ import { Type } from "typebox";
 import { getConfigDirectory, loadConfig } from "./config.js";
 import { OwnedAgentViewController } from "./agent-view.js";
 import { HerdrClient } from "./herdr.js";
-import { AgentManager, type WaitProgress } from "./manager.js";
+import { AgentManager } from "./manager.js";
 import { DeferredNotifications } from "./notifications.js";
 import { discoverInheritedResources, resolveRuntimeSettings } from "./resources.js";
 import {
@@ -172,113 +172,101 @@ function registerTools(pi: ExtensionAPI, config: ExtensionConfig, getManager: ()
   const identityCatalog = config.identities.map((identity) => `${identity.name}: ${identity.description}`).join("\n");
 
   pi.registerTool({
-    name: "start_agent",
-    label: "Start Agent",
-    description: `Start a temporary owned Pi agent in a new tab in the current Herdr workspace. Returns after the agent accepts its assignment. Available identities:\n${identityCatalog}`,
-    promptSnippet: "Start a temporary Pi agent in a new Herdr tab",
+    name: "start_agents",
+    label: "Start Agents",
+    description: `Start a fixed batch of one or more temporary owned Pi agents in new tabs in the current Herdr workspace. Returns after each agent either accepts its assignment or fails to start. The parent receives one completion notification after the whole batch settles. Available identities:\n${identityCatalog}`,
+    promptSnippet: "Start one fixed batch of temporary Pi agents",
     promptGuidelines: [
-      "Use start_agent only for a bounded read-only deliverable when delegation materially reduces parent context load, enables useful independent progress, or provides justified corroboration.",
+      "Use start_agents only for bounded read-only deliverables when delegation materially reduces parent context load, enables useful independent progress, or provides justified corroboration.",
+      "Put assignments that require one synthesis in the same call. A one-agent batch is valid.",
       "Give each assignment one requested result, relevant starting anchors, known constraints, a stopping condition, and the evidence the parent needs.",
       "Keep implementation, mutation, outcome framing, cross-cutting decisions, synthesis, and user communication in the parent session.",
-      "After start_agent or send_agent returns, continue useful independent work or finish the parent turn by default. Do not call wait_agents only to monitor completion.",
+      "After dispatch, continue useful independent work or finish the parent turn so the batch completion notification can resume it.",
       "Do not duplicate an active agent's scope. Give concurrent agents non-overlapping scopes unless independent corroboration is intentional.",
-      "After completion, check the material evidence needed to integrate the result.",
     ],
     parameters: Type.Object({
-      name: Type.String({ description: "Unique task name matching [a-z][a-z0-9_-]{0,28}" }),
-      identity: Type.String({ description: `Configured agent identity. Available when this session started: ${identityNames.join(", ")}` }),
-      task: Type.String({ description: "Concrete assignment and expected result" }),
-      keep_open: Type.Optional(Type.Boolean({ description: "Keep the agent tab open after completion. Default: false." })),
+      agents: Type.Array(Type.Object({
+        name: Type.String({ description: "Unique task name matching [a-z][a-z0-9_-]{0,28}" }),
+        identity: Type.String({ description: `Configured agent identity. Available when this session started: ${identityNames.join(", ")}` }),
+        task: Type.String({ description: "Concrete assignment and expected result" }),
+        keep_open: Type.Optional(Type.Boolean({ description: "Keep the agent tab open after completion. Default: false." })),
+      }), { minItems: 1, description: "Fixed batch of agent assignments." }),
     }),
     async execute(_id, params, signal, _onUpdate, ctx) {
-      const record = await getManager().start({
-        name: params.name,
-        identityName: params.identity,
-        task: params.task,
-        keepOpen: params.keep_open ?? false,
+      assertUniqueNames(params.agents.map((agent) => agent.name));
+      const manager = getManager();
+      const outcomes = await Promise.allSettled(params.agents.map((agent) => manager.start({
+        name: agent.name,
+        identityName: agent.identity,
+        task: agent.task,
+        keepOpen: agent.keep_open ?? false,
         cwd: ctx.cwd,
-      }, signal);
-      return toolResult(`Started ${record.name} with identity ${record.identity}. Continue independent work or finish the parent turn; do not call wait_agents just to monitor completion.`, [record]);
+      }, signal)));
+      const records = outcomes.map((outcome, index) => outcome.status === "fulfilled"
+        ? outcome.value
+        : failedDispatchRecord(params.agents[index].name, params.agents[index].identity, params.agents[index].task, params.agents[index].keep_open ?? false, ctx.cwd, outcome.reason));
+      const batch = manager.batch(records);
+      const names = batch.members.map((member) => member.name).join(", ");
+      return batchToolResult(`Dispatched ${batch.id}: ${names}. Continue useful work or finish the parent turn; one notification will arrive after the batch settles.`, records, batch);
     },
   });
 
   pi.registerTool({
-    name: "send_agent",
-    label: "Send Agent",
-    description: "Send a message to a temporary owned agent. The message steers active work or starts the next assignment, reopening a closed agent when needed.",
-    promptSnippet: "Send guidance or a new assignment to an owned agent",
+    name: "send_agents",
+    label: "Send Agents",
+    description: "Send a fixed batch of one or more messages to owned agents. Messages to active agents guide their current assignments and remain in their existing batches. Messages to settled agents start a new assignment batch. Do not mix active guidance and new assignments in one call.",
+    promptSnippet: "Guide active agents or dispatch their next assignment batch",
     promptGuidelines: [
-      "Use send_agent only for a bounded read-only message when reusing an owned agent's existing session context provides a material benefit.",
-      "A message sent during active work must guide its current scope. Give a new assignment or materially expanded follow-up one requested result, relevant starting anchors, known constraints, a stopping condition, and the evidence the parent needs.",
-      "After start_agent or send_agent returns, continue useful independent work or finish the parent turn by default. Do not call wait_agents only to monitor completion.",
+      "Use send_agents only for bounded read-only messages when reusing owned agents' existing session context provides a material benefit.",
+      "Put new assignments that require one synthesis in the same call. A one-agent batch is valid.",
+      "A message sent during active work must guide its current scope. A message sent after settlement starts the next assignment and a new batch.",
+      "After dispatch, continue useful independent work or finish the parent turn so the batch completion notification can resume it.",
     ],
     parameters: Type.Object({
-      name: Type.String({ description: "Owned agent task name" }),
-      message: Type.String({ description: "Guidance for active work or a new bounded assignment" }),
+      agents: Type.Array(Type.Object({
+        name: Type.String({ description: "Owned agent task name" }),
+        message: Type.String({ description: "Guidance for active work or a new bounded assignment" }),
+      }), { minItems: 1, description: "Fixed batch of messages." }),
     }),
     async execute(_id, params, signal) {
-      const record = await getManager().send(params.name, params.message, signal);
-      return toolResult(`Sent message to ${record.name} for assignment ${record.assignment}. Continue independent work or finish the parent turn; do not call wait_agents just to monitor completion.`, [record]);
-    },
-  });
-
-  pi.registerTool({
-    name: "wait_agents",
-    label: "Wait for Agents",
-    description: "Exceptional tool only. Use wait_agents when one specific agent result is a prerequisite for an immediate next tool call in this parent turn and neither continuing nor collect_agents can satisfy that dependency. Do not use it to monitor progress, obtain a final response, or wait for later synthesis. Waiting claims those results and suppresses their automatic parent notification.",
-    promptSnippet: "Wait only for an immediate blocking dependency",
-    promptGuidelines: [
-      "Default completion protocol: do not call wait_agents after start_agent or send_agent. Continue useful independent work or finish the parent turn so completion notifications can resume it.",
-      "A final parent response or later synthesis is not an immediate next tool call and is not a reason to wait.",
-      "Use wait_agents only when one specific result is required for an immediate next tool call in this turn and neither yielding nor collect_agents can satisfy that dependency.",
-      "Pass explicit names for that one dependency. Do not omit names to wait for all working agents.",
-      "After collect_agents returns, never call wait_agents for any assignment in that collection. The collection notification supplies the grouped results.",
-    ],
-    parameters: Type.Object({
-      names: Type.Optional(Type.Array(Type.String(), { uniqueItems: true, description: "Agent names. Omit to wait for all working owned agents." })),
-    }),
-    async execute(_id, params, signal, onUpdate) {
-      const records = await getManager().wait(params.names, signal, (progress) => {
-        onUpdate?.({
-          content: [{ type: "text", text: formatWaitProgress(progress) }],
-          details: { progress },
-        });
-      });
-      return toolResult(formatResults(records), records);
-    },
-    renderResult(result, { isPartial }, _theme, context) {
-      if (context.isError) return singleLineComponent("Wait failed");
-      const details = result.details as { progress?: WaitProgress } | undefined;
-      if (isPartial && details?.progress) {
-        return inlineListComponent("", formatWaitItems(details.progress));
+      assertUniqueNames(params.agents.map((agent) => agent.name));
+      const manager = getManager();
+      const before = new Map(manager.getRecords().map((record) => [record.name, record]));
+      const missing = params.agents.find((agent) => !before.has(agent.name));
+      if (missing) throw new Error(`Unknown owned agent: ${missing.name}`);
+      const active = params.agents.map((agent) => before.get(agent.name)!.status === "working");
+      if (active.some(Boolean) && active.some((value) => !value)) {
+        throw new Error("Do not mix guidance for active assignments with new assignments for settled agents in one send_agents call.");
       }
-      return singleLineComponent("Done");
-    },
-  });
 
-  pi.registerTool({
-    name: "collect_agents",
-    label: "Collect Agents",
-    description: "Register a nonblocking barrier for an exact fixed group of current assignments whose results require one synthesis, whether or not useful independent work remains. Returns immediately, suppresses individual notifications, and sends one parent follow-up with the grouped results after every named assignment settles.",
-    promptSnippet: "Collect an exact group, then yield for one synthesis wake",
-    promptGuidelines: [
-      "Use collect_agents for an exact fixed group whose results require one synthesis, whether or not useful independent work remains.",
-      "After collect_agents returns, do not call wait_agents for any collected assignment. Continue useful work or finish the parent turn so the collection notification can resume it with the grouped results.",
-    ],
-    parameters: Type.Object({
-      names: Type.Array(Type.String(), {
-        minItems: 1,
-        uniqueItems: true,
-        description: "Fixed agent names whose current assignments form the collection.",
-      }),
-    }),
-    async execute(_id, params) {
-      const collection = getManager().collect(params.names);
-      const assignments = collection.members.map((member) => `${member.name}#${member.assignment}`).join(", ");
-      return {
-        content: [{ type: "text" as const, text: `Registered ${collection.id} for ${assignments}. The parent will be notified with the grouped results after all assignments settle. Do not call wait_agents for these assignments; continue useful work or finish the parent turn.` }],
-        details: { collection },
-      };
+      const outcomes = await Promise.allSettled(params.agents.map((agent) => manager.send(agent.name, agent.message, signal)));
+      const returned = outcomes.flatMap((outcome) => outcome.status === "fulfilled" ? [outcome.value] : []);
+      const newAssignments: OwnedAgentRecord[] = [];
+      for (let index = 0; index < outcomes.length; index += 1) {
+        const outcome = outcomes[index];
+        const agent = params.agents[index];
+        const previous = before.get(agent.name)!;
+        const current = manager.getRecords().find((record) => record.name === agent.name);
+        if (outcome.status === "fulfilled") {
+          if (outcome.value.assignment > previous.assignment) newAssignments.push(outcome.value);
+        } else if (current && current.assignment > previous.assignment) {
+          newAssignments.push(current);
+        } else if (!active[index]) {
+          newAssignments.push(failedDispatchRecord(agent.name, previous.identity, agent.message, previous.keepOpen, previous.cwd, outcome.reason));
+        }
+      }
+
+      if (newAssignments.length === 0) {
+        const failures = outcomes.flatMap((outcome, index) => outcome.status === "rejected" ? [`${params.agents[index].name}: ${errorMessage(outcome.reason)}`] : []);
+        const text = failures.length > 0
+          ? `Guidance completed with errors.\n${failures.join("\n")}`
+          : `Sent guidance for ${returned.map((record) => record.name).join(", ")}. The messages remain part of the active assignments' existing batches.`;
+        return toolResult(text, returned);
+      }
+
+      const batch = manager.batch(newAssignments);
+      const names = batch.members.map((member) => member.name).join(", ");
+      return batchToolResult(`Dispatched ${batch.id}: ${names}. Continue useful work or finish the parent turn; one notification will arrive after the batch settles.`, newAssignments, batch);
     },
   });
 
@@ -342,6 +330,42 @@ function toolResult(text: string, records: OwnedAgentRecord[]) {
   return { content: [{ type: "text" as const, text: content }], details: { records } };
 }
 
+function batchToolResult(text: string, records: OwnedAgentRecord[], batch: OwnedAgentCollection) {
+  return { content: [{ type: "text" as const, text }], details: { records, batch } };
+}
+
+function assertUniqueNames(names: string[]): void {
+  if (new Set(names).size !== names.length) throw new Error("Agent names must be unique within a batch.");
+}
+
+function failedDispatchRecord(
+  name: string,
+  identity: string,
+  task: string,
+  keepOpen: boolean,
+  cwd: string,
+  error: unknown,
+): OwnedAgentRecord {
+  const message = errorMessage(error);
+  return {
+    name,
+    identity,
+    keepOpen,
+    status: "failed",
+    cwd,
+    assignment: 0,
+    completedAssignment: 0,
+    lastTask: task,
+    lastResult: `Dispatch failed: ${message}`,
+    lastError: message,
+    updatedAt: Date.now(),
+  };
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 function formatList(records: OwnedAgentRecord[]): string {
   if (records.length === 0) return "No agents are owned by this parent session.";
   return records.map((record) => {
@@ -353,16 +377,6 @@ function formatList(records: OwnedAgentRecord[]): string {
 function formatResults(records: OwnedAgentRecord[]): string {
   if (records.length === 0) return "No working owned agents to wait for.";
   return records.map((record) => `## ${record.name} (${record.status})\n\n${record.lastResult ?? record.lastError ?? "(no result)"}`).join("\n\n");
-}
-
-function formatWaitProgress(progress: WaitProgress): string {
-  const items = formatWaitItems(progress);
-  return items.length > 0 ? items.join(" | ") : "No agents";
-}
-
-function formatWaitItems(progress: WaitProgress): string[] {
-  const completed = new Set(progress.completed);
-  return progress.selected.map((name) => `${name} ${completed.has(name) ? "✓" : "…"}`);
 }
 
 function updateAgentWidget(ctx: ExtensionContext, records: OwnedAgentRecord[], claimedNames: string[]): void {
@@ -384,19 +398,6 @@ function updateAgentWidget(ctx: ExtensionContext, records: OwnedAgentRecord[], c
     },
     invalidate() {},
   }));
-}
-
-function singleLineComponent(text: string) {
-  return inlineListComponent("", [text]);
-}
-
-function inlineListComponent(prefix: string, items: string[]) {
-  return {
-    render(width: number) {
-      return wrapInline(prefix, items, width);
-    },
-    invalidate() {},
-  };
 }
 
 function wrapInline(prefix: string, items: string[], width: number): string[] {
@@ -426,9 +427,9 @@ function formatNotification(record: OwnedAgentRecord): string {
 
 function formatCollectionNotification(collection: OwnedAgentCollection): string {
   const records = collection.members.flatMap((member) => member.result ? [member.result] : []);
-  const text = `Owned agent collection ${collection.id} settled.\n\n${formatResults(records)}`;
+  const text = `Owned agent batch ${collection.id} settled.\n\n${formatResults(records)}`;
   const truncated = truncateHead(text, { maxBytes: DEFAULT_MAX_BYTES, maxLines: DEFAULT_MAX_LINES });
   return truncated.truncated
-    ? `${truncated.content}\n\n[Collection output truncated. Full individual results remain in the child Pi session files.]`
+    ? `${truncated.content}\n\n[Batch output truncated. Full individual results remain in the child Pi session files.]`
     : truncated.content;
 }

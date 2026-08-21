@@ -7,10 +7,8 @@ import { minimatch } from "minimatch";
 import type { AgentIdentity, RuntimeSettings } from "./types.js";
 
 const DELEGATION_TOOLS = new Set([
-  "start_agent",
-  "send_agent",
-  "wait_agents",
-  "collect_agents",
+  "start_agents",
+  "send_agents",
   "list_agents",
   "interrupt_agent",
   "close_agent",

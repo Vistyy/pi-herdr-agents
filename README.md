@@ -7,7 +7,7 @@ An **agent identity** is global configuration that describes when an agent is us
 An **owned agent** is a resumable Pi session created from an agent identity and owned by one parent Pi session.
 
 Each managed child keeps its canonical Herdr ownership name (`oa-*`).
-The caller-provided `start_agent.name` is published separately as Herdr's display-only agent metadata through the `pi-herdr-agents` metadata source.
+Each caller-provided `start_agents.agents[].name` is published separately as Herdr's display-only agent metadata through the `pi-herdr-agents` metadata source.
 The metadata is guarded to apply to Herdr's authoritative `herdr:pi` lifecycle reporter and does not change Pi state reporting, ownership checks, waits, or rollups.
 
 The extension adds the `pi_herdr_owned=1` pane token to every owned child and installs a Herdr-session Agents view that excludes that token.
@@ -33,7 +33,7 @@ It does not fall back to unmanaged child processes.
 Install a released version from GitHub:
 
 ```sh
-pi install git:github.com/Vistyy/pi-herdr-agents@v0.1.16
+pi install git:github.com/Vistyy/pi-herdr-agents@v0.2.0
 ```
 
 Install a local checkout:
@@ -170,10 +170,8 @@ A leading `~/` resolves from the home directory.
 
 The delegation extension, the global `herdr` and `session-routing` skills, and these delegation tools are always excluded from children:
 
-- `start_agent`
-- `send_agent`
-- `wait_agents`
-- `collect_agents`
+- `start_agents`
+- `send_agents`
 - `list_agents`
 - `interrupt_agent`
 - `close_agent`
@@ -183,7 +181,7 @@ This keeps parent-only delegation policy and controls out of child prompts.
 
 ## Agent behavior
 
-The extension registers the seven delegation tools above when at least one valid identity exists.
+The extension registers the five delegation tools above when at least one valid identity exists.
 
 Each owned agent opens in a new tab in the parent session's current Herdr workspace and uses the parent's working directory.
 The extension does not create Git worktrees or enforce read-only access.
@@ -192,9 +190,11 @@ The parent retains implementation, mutation, outcome framing, cross-cutting deci
 A delegated investigation has one owner, and concurrent scopes do not overlap unless independent corroboration is intentional.
 Each assignment states one requested result, relevant starting anchors, known constraints, a stopping condition, and the evidence the parent needs.
 
-Default completion protocol: after `start_agent` or `send_agent` returns, do not call `wait_agents`.
-Continue useful independent work.
-If no independent work remains, finish the parent turn so the completion notification can resume it.
+Each `start_agents` call dispatches one fixed batch of assignments.
+A batch contains one or more assignments and produces one grouped completion notification after every assignment settles.
+Put assignments that require one synthesis in the same call.
+Continue useful independent work after dispatch.
+If no independent work remains, finish the parent turn so the batch completion notification can resume it.
 A normal task agent closes after it reports its result.
 Every child receives a mandatory read-only boundary after any profile-specific instructions.
 It must stop and report when continuing requires a guess, hidden uncertainty, broader scope, mutation, or a parent decision.
@@ -203,37 +203,23 @@ A complete result, partial evidence with a limitation, and a clear stopped repor
 The assignment user message contains the task-specific scope, acceptance criteria, stopping condition, and output requirements.
 Set `keep_open: true` when starting an agent to keep it as a persistent collaborator.
 
-`send_agent` steers an active assignment and keeps its existing assignment number, claims, and completion watcher.
-If the previous assignment has settled, the message starts the next assignment instead.
+`send_agents` steers active assignments without creating a new batch.
+If the previous assignments have settled, the messages start the next assignments as one new fixed batch.
+Do not mix active guidance and new assignments in one call.
+A one-agent call is valid.
 `interrupt_agent` sends Pi's Escape interrupt key, then waits for settlement with a bounded timeout.
 If Herdr still reports the child as working or unknown, the extension preserves the tab and session, retains the assignment lock, and continues reconciliation in the background.
 Sending a message to a closed agent resumes its Pi session in a new tab.
 The extension reloads `config.json` and the selected identity file before it starts or resumes a child, so edits apply without reloading the parent Pi session.
 
-Completion sends a hidden follow-up message to the parent and triggers a parent turn.
-The parent receives the latest assistant text, subject to Pi's output limits.
-If that text is truncated, the full child conversation remains in the recorded child session file but is not automatically loaded into the parent model context.
-If the parent is active when an agent completes, the extension defers the follow-up until that parent turn settles.
-`wait_agents` is an exceptional tool.
-Use it only when one specific agent result is a prerequisite for an immediate next tool call in the current parent turn and neither yielding nor `collect_agents` can satisfy that dependency.
-A task that needs a later final synthesis is not by itself a reason to preserve the current turn.
-Do not use `wait_agents` to monitor progress, obtain a final response, or wait for later synthesis.
-Calling `wait_agents` claims selected results, including deferred completions from the current parent turn, and suppresses their automatic notifications.
-After `collect_agents` returns, do not call `wait_agents` for any assignment in that collection.
-The collection notification supplies the grouped results.
-If no immediate blocking tool call remains, finish the parent turn so the notification can resume it.
-Canceling `wait_agents` does not stop its agents or lose their later completion notifications.
-While `wait_agents` runs, its tool row reports the selected agents, completed agents, and agents that are still pending.
+Batch completion sends one hidden follow-up message to the parent and triggers a parent turn.
+The grouped message contains the latest assistant text from every assignment in that batch, subject to Pi's output limits.
+If text is truncated, the full child conversation remains in the recorded child session file but is not automatically loaded into the parent model context.
+If the parent is active when the batch settles, the extension defers the follow-up until that parent turn settles.
+Successful, failed, blocked, and interrupted results all settle their batch member.
+Pending batches survive a Pi extension reload.
 
-Calling `collect_agents` registers a nonblocking barrier for an exact fixed group of current assignments whose results require one synthesis, whether or not useful independent work remains.
-It returns immediately, includes assignments that have already settled, suppresses pending individual notifications, and sends one hidden parent follow-up with the grouped results after all named assignments settle.
-After registering a collection, continue useful work or finish the parent turn.
-Do not call `wait_agents` for any assignment in the collection.
-Successful, failed, blocked, and interrupted results all satisfy the barrier.
-Pending collections survive a Pi extension reload.
-An individual notification that was already delivered before collection registration cannot be retracted.
-
-In TUI mode, a widget above the editor shows each live owned agent's status and marks agents whose results are claimed by a wait or collection.
+In TUI mode, a widget above the editor shows each live owned agent's status and marks assignments whose completion belongs to a pending batch.
 
 Only the same parent Pi session can list or resume its owned agents.
 Forked and unrelated Pi sessions do not adopt them.

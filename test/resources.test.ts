@@ -41,7 +41,7 @@ test("resource selectors apply defaults before identity filters", () => {
     },
     parent: { provider: "parent-provider", model: "parent-model", thinking: "high" },
     inherited,
-    activeTools: ["read", "edit", "start_agent"],
+    activeTools: ["read", "edit", "start_agents"],
   });
 
   assert.equal(resolved.provider, "parent-provider");
@@ -69,13 +69,13 @@ test("an empty resource list selects no inherited resources", () => {
 test("delegation tools and skills are unavailable even when force-included", () => {
   const resolved = resolveRuntimeSettings({
     identity: identity({
-      tools: ["+start_agent", "+collect_agents", "+read"],
+      tools: ["+start_agents", "+send_agents", "+read"],
       skills: ["+herdr", "+session-routing", "+review"],
     }),
     defaults: { tools: [], skills: [] },
     parent: {},
     inherited,
-    activeTools: ["read", "start_agent", "send_agent", "collect_agents", "close_agent"],
+    activeTools: ["read", "start_agents", "send_agents", "close_agent"],
   });
 
   assert.deepEqual(resolved.tools, ["read"]);

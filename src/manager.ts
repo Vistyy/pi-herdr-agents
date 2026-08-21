@@ -288,12 +288,20 @@ export class AgentManager {
     }
   }
 
-  collect(names: string[]): OwnedAgentCollection {
+  batch(records: OwnedAgentRecord[]): OwnedAgentCollection {
     this.assertRunning();
-    if (names.length === 0) throw new Error("At least one agent name is required.");
-    if (new Set(names).size !== names.length) throw new Error("Agent names must be unique.");
+    if (records.length === 0) throw new Error("At least one agent assignment is required.");
+    if (new Set(records.map((record) => record.name)).size !== records.length) throw new Error("Agent names must be unique within a batch.");
 
-    const records = names.map((name) => this.requireRecord(name));
+    for (const record of records) {
+      const managed = this.records.get(record.name);
+      if (!managed) continue;
+      if (record.completedAssignment === record.assignment) continue;
+      if (managed.assignment !== record.assignment) {
+        throw new Error(`Owned agent ${record.name} changed assignments before its batch was registered.`);
+      }
+      Object.assign(record, cloneRecord(managed));
+    }
     for (const record of records) {
       const isSettled = record.completedAssignment === record.assignment;
       const turn = this.turns.get(record.name);
@@ -309,7 +317,7 @@ export class AgentManager {
     }
 
     const collection: OwnedAgentCollection = {
-      id: `c-${randomUUID().slice(0, 8)}`,
+      id: `batch-${randomUUID().slice(0, 8)}`,
       members: records.map((record) => ({
         name: record.name,
         assignment: record.assignment,
