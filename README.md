@@ -33,7 +33,7 @@ It does not fall back to unmanaged child processes.
 Install a released version from GitHub:
 
 ```sh
-pi install git:github.com/Vistyy/pi-herdr-agents@v0.2.0
+pi install git:github.com/Vistyy/pi-herdr-agents@v0.2.1
 ```
 
 Install a local checkout:
@@ -219,7 +219,8 @@ If the parent is active when the batch settles, the extension defers the follow-
 Successful, failed, blocked, and interrupted results all settle their batch member.
 Pending batches survive a Pi extension reload.
 
-In TUI mode, a widget above the editor shows each live owned agent's status and marks assignments whose completion belongs to a pending batch.
+In TUI mode, a concise widget above the editor shows agents with active or blocked work.
+Use `list_agents` when you need identity, assignment, status, or resumability details.
 
 Only the same parent Pi session can list or resume its owned agents.
 Forked and unrelated Pi sessions do not adopt them.

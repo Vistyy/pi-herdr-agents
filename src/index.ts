@@ -96,10 +96,7 @@ export default async function piHerdrAgents(pi: ExtensionAPI): Promise<void> {
         persist(records, collections) {
           const snapshot: OwnedAgentSnapshot = { version: 2, parentSessionId, records, collections };
           pi.appendEntry(OWNED_AGENT_ENTRY, snapshot);
-          updateAgentWidget(ctx, records, manager?.getClaimedNames() ?? []);
-        },
-        changed() {
-          updateAgentWidget(ctx, manager?.getRecords() ?? [], manager?.getClaimedNames() ?? []);
+          updateAgentWidget(ctx, records);
         },
         notify(record) {
           notifications?.complete(notificationKey(record), { kind: "agent", record });
@@ -207,7 +204,7 @@ function registerTools(pi: ExtensionAPI, config: ExtensionConfig, getManager: ()
         : failedDispatchRecord(params.agents[index].name, params.agents[index].identity, params.agents[index].task, params.agents[index].keep_open ?? false, ctx.cwd, outcome.reason));
       const batch = manager.batch(records);
       const names = batch.members.map((member) => member.name).join(", ");
-      return batchToolResult(`Dispatched ${batch.id}: ${names}. Continue useful work or finish the parent turn; one notification will arrive after the batch settles.`, records, batch);
+      return batchToolResult(`Started ${batch.id}: ${names}.`, records, batch);
     },
   });
 
@@ -260,13 +257,13 @@ function registerTools(pi: ExtensionAPI, config: ExtensionConfig, getManager: ()
         const failures = outcomes.flatMap((outcome, index) => outcome.status === "rejected" ? [`${params.agents[index].name}: ${errorMessage(outcome.reason)}`] : []);
         const text = failures.length > 0
           ? `Guidance completed with errors.\n${failures.join("\n")}`
-          : `Sent guidance for ${returned.map((record) => record.name).join(", ")}. The messages remain part of the active assignments' existing batches.`;
+          : `Guided active assignments: ${returned.map((record) => record.name).join(", ")}.`;
         return toolResult(text, returned);
       }
 
       const batch = manager.batch(newAssignments);
       const names = batch.members.map((member) => member.name).join(", ");
-      return batchToolResult(`Dispatched ${batch.id}: ${names}. Continue useful work or finish the parent turn; one notification will arrive after the batch settles.`, newAssignments, batch);
+      return batchToolResult(`Started ${batch.id}: ${names}.`, newAssignments, batch);
     },
   });
 
@@ -375,22 +372,24 @@ function formatList(records: OwnedAgentRecord[]): string {
 }
 
 function formatResults(records: OwnedAgentRecord[]): string {
-  if (records.length === 0) return "No working owned agents to wait for.";
-  return records.map((record) => `## ${record.name} (${record.status})\n\n${record.lastResult ?? record.lastError ?? "(no result)"}`).join("\n\n");
+  if (records.length === 0) return "No agent results.";
+  return records.map((record) => {
+    const status = record.status === "idle" || record.status === "closed" ? "" : ` (${record.status})`;
+    return `## ${record.name}${status}\n\n${record.lastResult ?? record.lastError ?? "(no result)"}`;
+  }).join("\n\n");
 }
 
-function updateAgentWidget(ctx: ExtensionContext, records: OwnedAgentRecord[], claimedNames: string[]): void {
+function updateAgentWidget(ctx: ExtensionContext, records: OwnedAgentRecord[]): void {
   if (ctx.mode !== "tui") return;
-  const claimed = new Set(claimedNames);
   const visible = records.filter((record) =>
-    record.status === "starting" || Boolean(record.paneId) || claimed.has(record.name),
+    record.status === "starting" || record.status === "working" || record.status === "blocked",
   );
   if (visible.length === 0) {
     ctx.ui.setWidget("pi-herdr-agents", undefined);
     return;
   }
   const items = visible.map((record) =>
-    `${record.name} [${record.status}${claimed.has(record.name) ? "/claimed" : ""}]`,
+    record.status === "working" ? record.name : `${record.name} (${record.status})`,
   );
   ctx.ui.setWidget("pi-herdr-agents", () => ({
     render(width) {
@@ -405,7 +404,7 @@ function wrapInline(prefix: string, items: string[], width: number): string[] {
   const lines: string[] = [];
   let line = prefix;
   for (const item of items) {
-    const separator = line === prefix ? "" : " | ";
+    const separator = line === prefix ? "" : ", ";
     if (line.length > prefix.length && line.length + separator.length + item.length > width) {
       lines.push(line.slice(0, width));
       line = `${" ".repeat(prefix.length)}${item}`;
@@ -422,7 +421,8 @@ function notificationKey(record: OwnedAgentRecord): string {
 }
 
 function formatNotification(record: OwnedAgentRecord): string {
-  return `Owned agent ${record.name} settled with status ${record.status}.\n\n${record.lastResult ?? record.lastError ?? "(no result)"}`;
+  const status = record.status === "idle" || record.status === "closed" ? "" : ` (${record.status})`;
+  return `Owned agent ${record.name} settled${status}.\n\n${record.lastResult ?? record.lastError ?? "(no result)"}`;
 }
 
 function formatCollectionNotification(collection: OwnedAgentCollection): string {

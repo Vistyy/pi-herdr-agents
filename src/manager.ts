@@ -30,7 +30,6 @@ export interface ManagerCallbacks {
   notifyCollection?(collection: OwnedAgentCollection): void;
   claimNotification?(record: OwnedAgentRecord): void;
   releaseNotification?(record: OwnedAgentRecord): void;
-  changed?(): void;
   reloadConfig?(): Promise<ExtensionConfig>;
   resolveRuntime?(identity: AgentIdentity, cwd: string, defaults: RuntimeSettings): Promise<RuntimeSettings>;
   warn?(message: string): void;
@@ -61,13 +60,6 @@ export class AgentManager {
 
   getCollections(): OwnedAgentCollection[] {
     return [...this.collections.values()].map(cloneCollection);
-  }
-
-  getClaimedNames(): string[] {
-    return [...this.turns.entries()]
-      .filter(([, turn]) => turn.claims.size > 0)
-      .map(([name]) => name)
-      .sort();
   }
 
   async restore(records: OwnedAgentRecord[], collections: OwnedAgentCollection[] = []): Promise<void> {
@@ -333,7 +325,6 @@ export class AgentManager {
     }
     this.persist();
     this.completeCollections();
-    this.callbacks.changed?.();
     return cloneCollection(collection);
   }
 
@@ -360,7 +351,6 @@ export class AgentManager {
       this.callbacks.claimNotification?.(cloneRecord(selection.record));
       if (selection.turn) selection.turn.claims.add(claim);
     }
-    this.callbacks.changed?.();
     reportProgress();
 
     try {
@@ -380,7 +370,6 @@ export class AgentManager {
           this.persistAndNotify(record, false);
         }
       }
-      this.callbacks.changed?.();
       throw error;
     }
   }
