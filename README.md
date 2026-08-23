@@ -36,7 +36,7 @@ It does not fall back to unmanaged child processes.
 Install a released version from GitHub:
 
 ```sh
-pi install git:github.com/Vistyy/pi-herdr-agents@v0.2.6
+pi install git:github.com/Vistyy/pi-herdr-agents@v0.2.7
 ```
 
 Install a local checkout:
