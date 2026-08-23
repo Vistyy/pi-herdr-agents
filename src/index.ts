@@ -174,13 +174,12 @@ function registerTools(pi: ExtensionAPI, config: ExtensionConfig, getManager: ()
     description: `Start a fixed batch of one or more temporary read-only Pi helpers in new tabs in the current Herdr workspace. Each helper performs one small supporting task and returns evidence for parent evaluation. Returns after each helper either accepts its assignment or fails to start. The parent receives one completion notification after the whole batch settles. Available identities:\n${identityCatalog}`,
     promptSnippet: "Start one fixed batch of temporary Pi helpers",
     promptGuidelines: [
-      "Use start_agents only when one or more small, explicitly bounded, read-only supporting tasks materially reduce parent context load, enable useful independent progress, or provide justified corroboration.",
-      "A helper may inspect several connected sources to answer one precise local question. Do not delegate the overall investigation, holistic review, design choice, governing explanation, or final recommendation.",
-      "Give each assignment one requested evidence result, relevant starting anchors, known constraints, a stopping condition, and the evidence the parent needs.",
-      "Keep implementation, mutation, outcome framing, cross-cutting decisions, synthesis, and user communication in the parent session.",
-      "A batch only groups helper tasks started together. Use multiple helpers only for non-overlapping scopes or intentional independent corroboration. A one-helper batch is valid.",
+      "Use start_agents only for a bounded read-only supporting task when delegation materially reduces parent context load, enables useful independent progress, or provides justified corroboration.",
+      "Scope an assignment by its question, not by the number of sources it may require.",
+      "Keep implementation, consequential decisions, synthesis, and user communication in the parent session.",
+      "Give each assignment the requested result, relevant starting anchors and constraints, and a stopping condition when one is useful.",
+      "Use multiple helpers only for non-overlapping scopes or intentional independent corroboration. A one-helper batch is valid.",
       "After dispatch, continue useful independent work or finish the parent turn so the batch completion notification can resume it.",
-      "Treat every helper report as a subordinate evidence input that requires parent evaluation.",
     ],
     parameters: Type.Object({
       agents: Type.Array(Type.Object({
@@ -215,12 +214,11 @@ function registerTools(pi: ExtensionAPI, config: ExtensionConfig, getManager: ()
     description: "Send a fixed batch of one or more messages to owned helpers. Messages to active helpers guide their current assignments and remain in their existing batches. Messages to settled helpers start a new assignment batch. Do not mix active guidance and new assignments in one call.",
     promptSnippet: "Guide active helpers or dispatch their next assignment batch",
     promptGuidelines: [
-      "Use send_agents only for small, explicitly bounded, read-only supporting messages when reusing an owned helper's existing session context provides a material benefit.",
-      "Do not broaden a helper into the overall investigation, holistic review, design choice, governing explanation, or final recommendation.",
+      "Use send_agents only for a bounded read-only supporting message when reusing an owned helper's existing session context provides a material benefit.",
+      "Keep implementation, consequential decisions, synthesis, and user communication in the parent session.",
       "A message sent during active work must guide its current scope. A message sent after settlement starts one new supporting assignment and a new batch.",
       "Use multiple helpers only for non-overlapping scopes or intentional independent corroboration. A one-helper batch is valid.",
       "After dispatch, continue useful independent work or finish the parent turn so the batch completion notification can resume it.",
-      "Treat every helper report as a subordinate evidence input that requires parent evaluation.",
     ],
     parameters: Type.Object({
       agents: Type.Array(Type.Object({
@@ -425,12 +423,12 @@ function notificationKey(record: OwnedAgentRecord): string {
 
 function formatNotification(record: OwnedAgentRecord): string {
   const status = record.status === "idle" || record.status === "closed" ? "" : ` (${record.status})`;
-  return `Owned helper ${record.name} settled${status}. Its report is a subordinate evidence input for parent evaluation, not an authoritative conclusion.\n\n${record.lastResult ?? record.lastError ?? "(no result)"}`;
+  return `Owned helper ${record.name} settled${status}. Evaluate this supporting report as evidence before deciding.\n\n${record.lastResult ?? record.lastError ?? "(no result)"}`;
 }
 
 function formatCollectionNotification(collection: OwnedAgentCollection): string {
   const records = collection.members.flatMap((member) => member.result ? [member.result] : []);
-  const text = `Owned helper batch ${collection.id} settled. These reports are subordinate evidence inputs for parent evaluation, not authoritative conclusions.\n\n${formatResults(records)}`;
+  const text = `Owned helper batch ${collection.id} settled. Evaluate these supporting reports as evidence before deciding.\n\n${formatResults(records)}`;
   const truncated = truncateHead(text, { maxBytes: DEFAULT_MAX_BYTES, maxLines: DEFAULT_MAX_LINES });
   return truncated.truncated
     ? `${truncated.content}\n\n[Batch output truncated. Full individual results remain in the child Pi session files.]`
