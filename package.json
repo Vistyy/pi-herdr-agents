@@ -1,6 +1,6 @@
 {
   "name": "@vistyy/pi-herdr-agents",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "Owned Pi agents in Herdr tabs.",
   "type": "module",
   "packageManager": "pnpm@11.21.0",

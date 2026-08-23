@@ -171,21 +171,22 @@ function registerTools(pi: ExtensionAPI, config: ExtensionConfig, getManager: ()
   pi.registerTool({
     name: "start_agents",
     label: "Start Agents",
-    description: `Start a fixed batch of one or more temporary read-only Pi helpers in new tabs in the current Herdr workspace. Each helper performs one small supporting task and returns evidence for parent evaluation. Returns after each helper either accepts its assignment or fails to start. The parent receives one completion notification after the whole batch settles. Available identities:\n${identityCatalog}`,
-    promptSnippet: "Start one fixed batch of temporary Pi helpers",
+    description: `Start a fixed batch of one or more temporary read-only Pi helpers in new tabs in the current Herdr workspace. Each task names one source-local unknown and asks one factual question about a specific component, operation, invariant, or source relationship. Partition a batch by behavior or claim, never by repository area such as implementation, tests, or documentation. A helper does not assess a whole branch, suite, documentation set, investigation, plan, or recommendation. Returns after each helper either accepts its assignment or fails to start. The parent receives one completion notification after the whole batch settles. Available identities:\n${identityCatalog}`,
+    promptSnippet: "Delegate source-local questions to temporary Pi helpers",
     promptGuidelines: [
-      "Use start_agents only for a bounded read-only supporting task when delegation materially reduces parent context load, enables useful independent progress, or provides justified corroboration.",
-      "Scope an assignment by its question, not by the number of sources it may require.",
-      "Keep implementation, consequential decisions, synthesis, and user communication in the parent session.",
-      "Give each assignment the requested result, relevant starting anchors and constraints, and a stopping condition when one is useful.",
-      "Use multiple helpers only for non-overlapping scopes or intentional independent corroboration. A one-helper batch is valid.",
-      "After dispatch, continue useful independent work or finish the parent turn so the batch completion notification can resume it.",
+      "For an investigation, explanation, feasibility judgment, or plan: (1) identify source-local unknowns without reading their answering sources, (2) delegate each unknown as one factual local question, (3) end the turn immediately after dispatch, and (4) connect the reports and make the overall judgment yourself.",
+      "A valid task names exactly one unknown and asks how one specific component, operation, invariant, or source relationship behaves. Do not bundle concerns or ask a helper to assess, review, plan, recommend, or identify material gaps.",
+      "Partition a batch by behavior or claim, never into implementation, test, and documentation branches. A local question may inspect connected sources when they all answer that question.",
+      "Use one batch for the non-overlapping local questions needed by the same reasoning step. Use duplicate scopes only for intentional corroboration.",
+      "The parent owns implementation, final verification, consequential decisions, synthesis, recommendations, and the final response.",
+      "After start_agents returns, do not call another tool or inspect any source. End the turn and wait for the batch completion follow-up.",
+      "After reports arrive, do not re-read delegated sources unless an exact conflict or synthesis question requires it.",
     ],
     parameters: Type.Object({
       agents: Type.Array(Type.Object({
         name: Type.String({ description: "Unique task name matching [a-z][a-z0-9_-]{0,28}" }),
         identity: Type.String({ description: `Configured agent identity. Available when this session started: ${identityNames.join(", ")}` }),
-        task: Type.String({ description: "One small, concrete read-only supporting task and requested evidence" }),
+        task: Type.String({ description: "Exactly one factual read-only question about one named component, operation, invariant, or source relationship. Partition by behavior or claim, not by implementation, tests, or documentation. Request evidence, not assessment, review, gap analysis, planning, or recommendation." }),
         keep_open: Type.Optional(Type.Boolean({ description: "Keep the agent tab open after completion. Default: false." })),
       }), { minItems: 1, description: "Fixed batch of agent assignments." }),
     }),
@@ -204,26 +205,26 @@ function registerTools(pi: ExtensionAPI, config: ExtensionConfig, getManager: ()
         : failedDispatchRecord(params.agents[index].name, params.agents[index].identity, params.agents[index].task, params.agents[index].keep_open ?? false, ctx.cwd, outcome.reason));
       const batch = manager.batch(records);
       const names = batch.members.map((member) => member.name).join(", ");
-      return batchToolResult(`Started ${batch.id}: ${names}.`, records, batch);
+      return batchToolResult(`Started ${batch.id}: ${names}. End this turn now. Do not call another tool or inspect sources before the batch completion follow-up arrives.`, records, batch);
     },
   });
 
   pi.registerTool({
     name: "send_agents",
     label: "Send Agents",
-    description: "Send a fixed batch of one or more messages to owned helpers. Messages to active helpers guide their current assignments and remain in their existing batches. Messages to settled helpers start a new assignment batch. Do not mix active guidance and new assignments in one call.",
-    promptSnippet: "Guide active helpers or dispatch their next assignment batch",
+    description: "Send messages to owned helpers. Guide an active helper within its current factual local question, or give a settled helper exactly one new factual local question. Partition work by behavior or claim, not by implementation, tests, or documentation. A message must not broaden into an assessment, review, gap analysis, plan, or recommendation. Do not mix active guidance and new assignments in one call.",
+    promptSnippet: "Guide a local question or dispatch its next assignment",
     promptGuidelines: [
-      "Use send_agents only for a bounded read-only supporting message when reusing an owned helper's existing session context provides a material benefit.",
-      "Keep implementation, consequential decisions, synthesis, and user communication in the parent session.",
-      "A message sent during active work must guide its current scope. A message sent after settlement starts one new supporting assignment and a new batch.",
-      "Use multiple helpers only for non-overlapping scopes or intentional independent corroboration. A one-helper batch is valid.",
-      "After dispatch, continue useful independent work or finish the parent turn so the batch completion notification can resume it.",
+      "Reuse a helper when its existing source context materially helps answer the current factual local question or one new factual local question.",
+      "Do not broaden a helper, bundle concerns, or request an assessment, review, gap analysis, plan, or recommendation.",
+      "Partition work by behavior or claim, never into implementation, test, and documentation branches. Use one batch for non-overlapping local questions needed by the same reasoning step.",
+      "After a new assignment starts, do not call another tool or inspect any source. End the turn and wait for the batch completion follow-up.",
+      "The parent evaluates and connects reports, owns all consequential judgments, and does not re-read delegated sources without an exact conflict or synthesis need.",
     ],
     parameters: Type.Object({
       agents: Type.Array(Type.Object({
         name: Type.String({ description: "Owned agent task name" }),
-        message: Type.String({ description: "Guidance for active work or a new bounded assignment" }),
+        message: Type.String({ description: "Guidance within the active factual local question, or exactly one new factual local question for a settled helper. Partition by behavior or claim. Do not request assessment, review, gap analysis, planning, or recommendation." }),
       }), { minItems: 1, description: "Fixed batch of messages." }),
     }),
     async execute(_id, params, signal) {
@@ -264,7 +265,7 @@ function registerTools(pi: ExtensionAPI, config: ExtensionConfig, getManager: ()
 
       const batch = manager.batch(newAssignments);
       const names = batch.members.map((member) => member.name).join(", ");
-      return batchToolResult(`Started ${batch.id}: ${names}.`, newAssignments, batch);
+      return batchToolResult(`Started ${batch.id}: ${names}. End this turn now. Do not call another tool or inspect sources before the batch completion follow-up arrives.`, newAssignments, batch);
     },
   });
 
@@ -423,12 +424,12 @@ function notificationKey(record: OwnedAgentRecord): string {
 
 function formatNotification(record: OwnedAgentRecord): string {
   const status = record.status === "idle" || record.status === "closed" ? "" : ` (${record.status})`;
-  return `Owned helper ${record.name} settled${status}. Evaluate this supporting report as evidence before deciding.\n\n${record.lastResult ?? record.lastError ?? "(no result)"}`;
+  return `Owned helper ${record.name} settled${status}. Evaluate and connect this evidence yourself; do not merely repeat the report.\n\n${record.lastResult ?? record.lastError ?? "(no result)"}`;
 }
 
 function formatCollectionNotification(collection: OwnedAgentCollection): string {
   const records = collection.members.flatMap((member) => member.result ? [member.result] : []);
-  const text = `Owned helper batch ${collection.id} settled. Evaluate these supporting reports as evidence before deciding.\n\n${formatResults(records)}`;
+  const text = `Owned helper batch ${collection.id} settled. Evaluate and connect this evidence yourself; do not merely repeat the reports.\n\n${formatResults(records)}`;
   const truncated = truncateHead(text, { maxBytes: DEFAULT_MAX_BYTES, maxLines: DEFAULT_MAX_LINES });
   return truncated.truncated
     ? `${truncated.content}\n\n[Batch output truncated. Full individual results remain in the child Pi session files.]`

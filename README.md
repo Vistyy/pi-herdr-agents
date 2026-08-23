@@ -36,7 +36,7 @@ It does not fall back to unmanaged child processes.
 Install a released version from GitHub:
 
 ```sh
-pi install git:github.com/Vistyy/pi-herdr-agents@v0.2.3
+pi install git:github.com/Vistyy/pi-herdr-agents@v0.2.4
 ```
 
 Install a local checkout:
@@ -189,18 +189,20 @@ The extension registers the five delegation tools above when at least one valid 
 
 Each owned helper opens in a new tab in the parent session's current Herdr workspace and uses the parent's working directory.
 The extension does not create Git worktrees or enforce read-only access.
-Its tool guidance delegates bounded read-only supporting tasks only when doing so provides a material benefit.
-The parent scopes an assignment by its question rather than by the number of sources it may require.
-The parent retains implementation, consequential decisions, synthesis, and user communication.
+When an investigation, explanation, feasibility judgment, or plan needs source-local evidence, the parent identifies its unknowns without reading the sources that answer them.
+It gives each helper exactly one factual question about how a specific component, operation, invariant, or source relationship behaves.
+It partitions a batch by behavior or claim, not into implementation, test, and documentation branches.
+A helper does not receive bundled concerns or assess, review, find material gaps, plan, or recommend.
+The parent retains the overall investigation, plan, design choice, final recommendation, implementation, final verification, consequential decisions, synthesis, and user communication.
 Concurrent helper scopes do not overlap unless independent corroboration is intentional.
 Each assignment contains the requested result, relevant starting anchors and constraints, and a stopping condition when one is useful.
 
 Each `start_agents` call dispatches one fixed batch of assignments.
 A batch contains one or more supporting assignments and produces one grouped completion notification after every assignment settles.
 A batch groups helpers started together and does not transfer synthesis to them.
-Use multiple helpers only for non-overlapping scopes or intentional independent corroboration.
-Continue useful independent work after dispatch.
-If no independent work remains, finish the parent turn so the batch completion notification can resume it.
+Use multiple helpers only for non-overlapping local questions or intentional independent corroboration.
+After dispatch returns, the parent does not call another tool or inspect any source.
+It finishes the turn immediately so the batch completion notification can resume it.
 A normal helper closes after it reports its evidence.
 Every child receives a mandatory read-only boundary after any profile-specific instructions.
 If its task requires a state change, it reports that limitation and stops.
@@ -217,7 +219,7 @@ Sending a message to a closed agent resumes its Pi session in a new tab.
 The extension reloads `config.json` and the selected identity file before it starts or resumes a child, so edits apply without reloading the parent Pi session.
 
 Batch completion sends one hidden follow-up message to the parent and triggers a parent turn.
-The message tells the parent to evaluate the supporting reports as evidence before deciding.
+The message tells the parent to evaluate and connect the evidence itself instead of merely repeating the reports.
 The grouped message contains the latest assistant text from every assignment in that batch, subject to Pi's output limits.
 If text is truncated, the full child conversation remains in the recorded child session file but is not automatically loaded into the parent model context.
 If the parent is active when the batch settles, the extension defers the follow-up until that parent turn settles.
