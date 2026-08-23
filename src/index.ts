@@ -174,16 +174,17 @@ function registerTools(pi: ExtensionAPI, config: ExtensionConfig, getManager: ()
     description: `Start a fixed batch of one or more temporary read-only Pi helpers in new tabs in the current Herdr workspace. Each helper owns one bounded supporting slice and may inspect connected sources or reason within that slice. Omit identity to use the configured default identity. Returns after each helper either accepts its assignment or fails to start. The parent receives one completion notification after the whole batch settles. Available identities:\n${identityCatalog}`,
     promptSnippet: "Delegate bounded read-only supporting slices to temporary Pi helpers",
     promptGuidelines: [
-      "Use start_agents only when a bounded read-only supporting slice materially reduces parent context load, enables useful independent progress, uses specialized context, or provides justified corroboration.",
-      "Give each helper one requested local result with relevant anchors, constraints, and a stopping condition when useful. A helper may inspect connected sources and make findings within its slice.",
-      "Keep the user outcome, consequential interpretation, cross-cutting decisions, synthesis, implementation, final verification, and final response in the parent session.",
-      "Do not duplicate the exact active helper slice. Continue non-duplicative parent work, and evaluate each report before using it. Inspect material source evidence when needed to support the parent conclusion.",
+      "Use start_agents for separable context-heavy source inspection, history or transcript searches, inventories, narrow read-only probes, independent factual checks, and other bounded slices whose reports keep underlying source detail out of the parent context.",
+      "Give each helper one requested local result with relevant anchors, constraints, and a stopping condition when useful. Ask it to identify inspected sources, direct observations, supported inferences, and material unknowns.",
+      "Keep the user outcome, consequential interpretation, cross-cutting decisions, plan and design, synthesis, implementation, final verification, and final response in the parent session.",
+      "Do not duplicate the exact active helper slice. Continue only non-duplicative work that does not depend on its report. Evaluate each report and inspect underlying evidence only for a consequential gap, conflict, unsupported inference, or unclear source.",
+      "When reports become the next dependency, end the parent turn without concluding the user outcome so the completion notification can resume it. Do not poll or resend because a normal temporary helper tab closed.",
     ],
     parameters: Type.Object({
       agents: Type.Array(Type.Object({
         name: Type.String({ description: "Unique task name matching [a-z][a-z0-9_-]{0,28}" }),
         identity: Type.Optional(Type.String({ description: `Configured agent identity. Omit to use "default". Available when this session started: ${identityNames.join(", ")}` })),
-        task: Type.String({ description: "One bounded read-only supporting slice and its requested local result. The helper may inspect connected sources and reason within the slice, but must not own the parent outcome or its consequential interpretation." }),
+        task: Type.String({ description: "One bounded read-only supporting slice and its requested evidence-backed local result. The helper may inspect connected sources and reason within the slice, but must not own the parent outcome, plan or design, or consequential interpretation." }),
         keep_open: Type.Optional(Type.Boolean({ description: "Keep the agent tab open after completion. Default: false." })),
       }), { minItems: 1, description: "Fixed batch of agent assignments." }),
     }),
@@ -202,7 +203,7 @@ function registerTools(pi: ExtensionAPI, config: ExtensionConfig, getManager: ()
         : failedDispatchRecord(params.agents[index].name, params.agents[index].identity ?? "default", params.agents[index].task, params.agents[index].keep_open ?? false, ctx.cwd, outcome.reason));
       const batch = manager.batch(records);
       const names = batch.members.map((member) => member.name).join(", ");
-      return batchToolResult(`Started ${batch.id}: ${names}. Continue non-duplicative work or finish the parent turn; one notification will arrive after the batch settles.`, records, batch);
+      return batchToolResult(`Started ${batch.id}: ${names}. Continue only independent non-duplicative work. When these reports become the next dependency, finish the parent turn without concluding the user outcome; one notification will resume it after the batch settles.`, records, batch);
     },
   });
 
@@ -213,7 +214,7 @@ function registerTools(pi: ExtensionAPI, config: ExtensionConfig, getManager: ()
     promptSnippet: "Guide an active helper or dispatch its next bounded slice",
     promptGuidelines: [
       "Reuse a helper when its existing source context materially helps with guidance inside the active slice or with one new bounded supporting slice.",
-      "Do not broaden an active helper beyond its slice or transfer the parent outcome, consequential interpretation, synthesis, implementation, final verification, or final response.",
+      "Do not broaden an active helper beyond its slice or transfer the parent outcome, consequential interpretation, plan or design, synthesis, implementation, final verification, or final response.",
       "Do not duplicate the exact active helper slice. Continue non-duplicative parent work, and evaluate each report before using it.",
     ],
     parameters: Type.Object({
@@ -260,14 +261,14 @@ function registerTools(pi: ExtensionAPI, config: ExtensionConfig, getManager: ()
 
       const batch = manager.batch(newAssignments);
       const names = batch.members.map((member) => member.name).join(", ");
-      return batchToolResult(`Started ${batch.id}: ${names}. Continue non-duplicative work or finish the parent turn; one notification will arrive after the batch settles.`, newAssignments, batch);
+      return batchToolResult(`Started ${batch.id}: ${names}. Continue only independent non-duplicative work. When these reports become the next dependency, finish the parent turn without concluding the user outcome; one notification will resume it after the batch settles.`, newAssignments, batch);
     },
   });
 
   pi.registerTool({
     name: "list_agents",
     label: "List Agents",
-    description: "List agents owned by the current parent Pi session, including closed resumable agents.",
+    description: "List the assignment and tab lifecycle state of agents owned by the current parent Pi session, including settled agents whose tabs closed and sessions remain resumable. Completion reports arrive through batch notifications.",
     promptSnippet: "List agents owned by this parent session",
     parameters: Type.Object({}),
     async execute() {
@@ -360,11 +361,15 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function formatList(records: OwnedAgentRecord[]): string {
+export function formatList(records: OwnedAgentRecord[]): string {
   if (records.length === 0) return "No agents are owned by this parent session.";
   return records.map((record) => {
-    const resumable = record.sessionFile ? ", resumable" : "";
-    return `${record.name}: ${record.status}, identity ${record.identity}, assignment ${record.assignment}${resumable}`;
+    const settled = record.completedAssignment === record.assignment && (record.status === "idle" || record.status === "closed");
+    const state = settled
+      ? `settled, tab ${record.status === "closed" ? "closed" : "open"}, report retained`
+      : record.status;
+    const resumable = record.sessionFile ? ", session resumable" : "";
+    return `${record.name}: ${state}, identity ${record.identity}, assignment ${record.assignment}${resumable}`;
   }).join("\n");
 }
 

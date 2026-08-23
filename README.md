@@ -192,17 +192,21 @@ Each owned helper opens in a new tab in the parent session's current Herdr works
 The extension does not create Git worktrees or enforce read-only access.
 A helper owns one bounded read-only supporting slice.
 The slice can include connected sources and local reasoning when they contribute to its requested result.
-The parent retains the user outcome, consequential interpretation, cross-cutting decisions, synthesis, implementation, final verification, and user communication.
-The parent does not duplicate the exact active helper slice, but it can continue other investigation and work.
-It evaluates each report before using it and inspects material source evidence when needed to support its conclusion.
+Context-heavy source inspection, history or transcript searches, inventories, narrow read-only probes, and independent factual checks are normal delegation cases when a report keeps underlying source detail out of the parent context.
+The parent retains the user outcome, consequential interpretation, cross-cutting decisions, plan and design, synthesis, implementation, final verification, and user communication.
+The parent does not duplicate the exact active helper slice, but it can continue independent investigation and work that does not depend on the report.
+It evaluates each report and inspects underlying evidence when the report has a consequential gap, conflict, unsupported inference, or unclear source.
 Each assignment contains the requested local result, relevant starting anchors and constraints, and a stopping condition when one is useful.
+The report identifies inspected sources, direct observations, supported inferences, and material unknowns needed to evaluate its result.
 
 Each `start_agents` call dispatches one fixed batch of assignments.
 A batch contains one or more supporting assignments and produces one grouped completion notification after every assignment settles.
 A batch groups helpers started together and does not transfer synthesis to them.
 Use multiple helpers only for non-overlapping slices or intentional independent corroboration.
-After dispatch, continue non-duplicative work or finish the parent turn so the completion notification can resume it.
-A normal helper closes after it reports its evidence.
+After dispatch, continue only independent non-duplicative work.
+When the reports become the next dependency, finish the parent turn without concluding the user outcome so the completion notification can resume it.
+Do not poll status or resend an assignment because a normal temporary helper tab closed.
+A normal helper closes its tab after preserving its report and resumable session.
 Every child receives a mandatory read-only boundary after any profile-specific instructions.
 If its task requires a state change, it reports that limitation and stops.
 The assignment user message defines the task-specific behavior and output.
@@ -226,7 +230,8 @@ Successful, failed, blocked, and interrupted results all settle their batch memb
 Pending batches survive a Pi extension reload.
 
 In TUI mode, a concise widget above the editor shows agents with active or blocked work.
-Use `list_agents` when you need identity, assignment, status, or resumability details.
+Use `list_agents` when you need identity, assignment, tab lifecycle, or resumability details.
+A successfully completed temporary assignment is shown as settled even when its tab has closed; its report arrives through the batch completion notification.
 
 Only the same parent Pi session can list or resume its owned agents.
 Forked and unrelated Pi sessions do not adopt them.
