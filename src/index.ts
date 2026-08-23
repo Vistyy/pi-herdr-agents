@@ -171,22 +171,19 @@ function registerTools(pi: ExtensionAPI, config: ExtensionConfig, getManager: ()
   pi.registerTool({
     name: "start_agents",
     label: "Start Agents",
-    description: `Start a fixed batch of one or more temporary read-only Pi helpers in new tabs in the current Herdr workspace. Each task asks one bounded factual evidence question about a specific component, operation, invariant, or source relationship. Partition a batch by behavior or claim, never by repository area such as implementation, tests, or documentation. A helper does not assess a whole branch, suite, documentation set, investigation, plan, or recommendation. Returns after each helper either accepts its assignment or fails to start. The parent receives one completion notification after the whole batch settles. Available identities:\n${identityCatalog}`,
-    promptSnippet: "Delegate source-local questions to temporary Pi helpers",
+    description: `Start a fixed batch of one or more temporary read-only Pi helpers in new tabs in the current Herdr workspace. Each helper owns one bounded supporting slice and may inspect connected sources or reason within that slice. Omit identity to use the configured default identity. Returns after each helper either accepts its assignment or fails to start. The parent receives one completion notification after the whole batch settles. Available identities:\n${identityCatalog}`,
+    promptSnippet: "Delegate bounded read-only supporting slices to temporary Pi helpers",
     promptGuidelines: [
-      "Use start_agents for a factual evidence question whose retrieval is independently answerable and source-heavy, specialized, parallelizable, or likely to crowd the parent context. Inspect small local evidence directly.",
-      "A valid task asks one bounded question about how a specific component, operation, invariant, or source relationship behaves. Do not bundle unrelated concerns or ask a helper to assess, review, plan, recommend, or identify material gaps for the overall outcome.",
-      "Partition a batch by behavior or claim, never into implementation, test, and documentation branches. A local question may inspect connected sources when they all answer that question.",
-      "Use one batch for the non-overlapping local questions needed by the same reasoning step. Use duplicate scopes only for intentional corroboration.",
-      "The parent owns implementation, final verification, consequential decisions, synthesis, recommendations, and the final response.",
-      "Do not duplicate delegated work, inspect another evidence branch for the same outcome, or poll helper status. If the reports contribute to the current answer, plan, decision, or implementation, end the turn after dispatch. Continue only a separate user-requested outcome that cannot affect or be affected by the reports.",
-      "After reports arrive, do not re-read delegated sources unless an exact conflict or synthesis question requires it.",
+      "Use start_agents only when a bounded read-only supporting slice materially reduces parent context load, enables useful independent progress, uses specialized context, or provides justified corroboration.",
+      "Give each helper one requested local result with relevant anchors, constraints, and a stopping condition when useful. A helper may inspect connected sources and make findings within its slice.",
+      "Keep the user outcome, consequential interpretation, cross-cutting decisions, synthesis, implementation, final verification, and final response in the parent session.",
+      "Do not duplicate the exact active helper slice. Continue non-duplicative parent work, and evaluate each report before using it. Inspect material source evidence when needed to support the parent conclusion.",
     ],
     parameters: Type.Object({
       agents: Type.Array(Type.Object({
         name: Type.String({ description: "Unique task name matching [a-z][a-z0-9_-]{0,28}" }),
-        identity: Type.String({ description: `Configured agent identity. Available when this session started: ${identityNames.join(", ")}` }),
-        task: Type.String({ description: "One bounded factual read-only evidence question about a named component, operation, invariant, or source relationship. Partition by behavior or claim, not by implementation, tests, or documentation. Request evidence, not assessment, planning, or recommendation for the overall outcome." }),
+        identity: Type.Optional(Type.String({ description: `Configured agent identity. Omit to use "default". Available when this session started: ${identityNames.join(", ")}` })),
+        task: Type.String({ description: "One bounded read-only supporting slice and its requested local result. The helper may inspect connected sources and reason within the slice, but must not own the parent outcome or its consequential interpretation." }),
         keep_open: Type.Optional(Type.Boolean({ description: "Keep the agent tab open after completion. Default: false." })),
       }), { minItems: 1, description: "Fixed batch of agent assignments." }),
     }),
@@ -202,29 +199,27 @@ function registerTools(pi: ExtensionAPI, config: ExtensionConfig, getManager: ()
       }, signal)));
       const records = outcomes.map((outcome, index) => outcome.status === "fulfilled"
         ? outcome.value
-        : failedDispatchRecord(params.agents[index].name, params.agents[index].identity, params.agents[index].task, params.agents[index].keep_open ?? false, ctx.cwd, outcome.reason));
+        : failedDispatchRecord(params.agents[index].name, params.agents[index].identity ?? "default", params.agents[index].task, params.agents[index].keep_open ?? false, ctx.cwd, outcome.reason));
       const batch = manager.batch(records);
       const names = batch.members.map((member) => member.name).join(", ");
-      return batchToolResult(`Started ${batch.id}: ${names}. If these reports contribute to the current outcome, end this turn now. Do not inspect another evidence branch for that outcome or poll status. Continue only a separate user-requested outcome that cannot affect or be affected by the reports.`, records, batch);
+      return batchToolResult(`Started ${batch.id}: ${names}. Continue non-duplicative work or finish the parent turn; one notification will arrive after the batch settles.`, records, batch);
     },
   });
 
   pi.registerTool({
     name: "send_agents",
     label: "Send Agents",
-    description: "Send messages to owned helpers. Guide an active helper within its current factual local question, or give a settled helper one new bounded factual local question. Partition work by behavior or claim, not by implementation, tests, or documentation. A message must not broaden into an assessment, review, gap analysis, plan, or recommendation. Do not mix active guidance and new assignments in one call.",
-    promptSnippet: "Guide a local question or dispatch its next assignment",
+    description: "Send messages to owned helpers. Guide an active helper within its current bounded slice, or give a settled helper one new bounded read-only supporting slice. Do not mix active guidance and new assignments in one call.",
+    promptSnippet: "Guide an active helper or dispatch its next bounded slice",
     promptGuidelines: [
-      "Reuse a helper when its existing source context materially helps answer the current factual local question or one new factual local question.",
-      "Do not broaden a helper, bundle unrelated concerns, or request an assessment, plan, or recommendation for the overall outcome.",
-      "Partition work by behavior or claim, never into implementation, test, and documentation branches. Use one batch for non-overlapping local questions needed by the same reasoning step.",
-      "Do not duplicate delegated work, inspect another evidence branch for the same outcome, or poll helper status. If a new report contributes to the current answer, plan, decision, or implementation, end the turn after dispatch. Continue only a separate user-requested outcome that cannot affect or be affected by the report.",
-      "The parent evaluates and connects reports, owns all consequential judgments, and does not re-read delegated sources without an exact conflict or synthesis need.",
+      "Reuse a helper when its existing source context materially helps with guidance inside the active slice or with one new bounded supporting slice.",
+      "Do not broaden an active helper beyond its slice or transfer the parent outcome, consequential interpretation, synthesis, implementation, final verification, or final response.",
+      "Do not duplicate the exact active helper slice. Continue non-duplicative parent work, and evaluate each report before using it.",
     ],
     parameters: Type.Object({
       agents: Type.Array(Type.Object({
         name: Type.String({ description: "Owned agent task name" }),
-        message: Type.String({ description: "Guidance within the active factual local question, or one new bounded factual local question for a settled helper. Partition by behavior or claim. Do not request assessment, planning, or recommendation for the overall outcome." }),
+        message: Type.String({ description: "Guidance within the active bounded slice, or one new bounded read-only supporting slice for a settled helper." }),
       }), { minItems: 1, description: "Fixed batch of messages." }),
     }),
     async execute(_id, params, signal) {
@@ -265,7 +260,7 @@ function registerTools(pi: ExtensionAPI, config: ExtensionConfig, getManager: ()
 
       const batch = manager.batch(newAssignments);
       const names = batch.members.map((member) => member.name).join(", ");
-      return batchToolResult(`Started ${batch.id}: ${names}. If these reports contribute to the current outcome, end this turn now. Do not inspect another evidence branch for that outcome or poll status. Continue only a separate user-requested outcome that cannot affect or be affected by the reports.`, newAssignments, batch);
+      return batchToolResult(`Started ${batch.id}: ${names}. Continue non-duplicative work or finish the parent turn; one notification will arrive after the batch settles.`, newAssignments, batch);
     },
   });
 

@@ -36,7 +36,7 @@ It does not fall back to unmanaged child processes.
 Install a released version from GitHub:
 
 ```sh
-pi install git:github.com/Vistyy/pi-herdr-agents@v0.2.5
+pi install git:github.com/Vistyy/pi-herdr-agents@v0.2.6
 ```
 
 Install a local checkout:
@@ -90,8 +90,8 @@ All runtime fields and the Markdown body are optional.
 
 ```md
 ---
-name: helper
-description: Checks one small, explicitly bounded question and returns evidence for parent evaluation.
+name: default
+description: Handles one bounded read-only supporting slice and returns a local result for parent evaluation.
 thinking: high
 skills:
   - verification
@@ -100,8 +100,9 @@ skills:
 ```
 
 The `name` must match `[a-z][a-z0-9_-]{0,63}`.
-The `description` tells the parent when and why to invoke the identity.
-Write a specific description because the parent uses it to select an identity.
+An assignment that omits `identity` uses the enabled identity named `default`.
+If no `default` identity is enabled, the assignment must name another identity.
+The `description` tells the parent when and why to select a non-default identity.
 
 A Markdown body supplies identity-specific instructions:
 
@@ -189,22 +190,18 @@ The extension registers the five delegation tools above when at least one valid 
 
 Each owned helper opens in a new tab in the parent session's current Herdr workspace and uses the parent's working directory.
 The extension does not create Git worktrees or enforce read-only access.
-The parent inspects small, local evidence directly.
-It delegates an evidence question when retrieval is independently answerable and source-heavy, specialized, parallelizable, or likely to crowd the parent context.
-Each helper receives one bounded factual evidence question about how a specific component, operation, invariant, or source relationship behaves.
-The parent partitions a batch by behavior or claim, not into implementation, test, and documentation branches.
-A helper does not receive unrelated concerns or assess, plan, or recommend for the overall outcome.
-The parent retains the overall investigation, plan, design choice, final recommendation, implementation, final verification, consequential decisions, synthesis, and user communication.
-Concurrent helper scopes do not overlap unless independent corroboration is intentional.
-Each assignment contains the requested result, relevant starting anchors and constraints, and a stopping condition when one is useful.
+A helper owns one bounded read-only supporting slice.
+The slice can include connected sources and local reasoning when they contribute to its requested result.
+The parent retains the user outcome, consequential interpretation, cross-cutting decisions, synthesis, implementation, final verification, and user communication.
+The parent does not duplicate the exact active helper slice, but it can continue other investigation and work.
+It evaluates each report before using it and inspects material source evidence when needed to support its conclusion.
+Each assignment contains the requested local result, relevant starting anchors and constraints, and a stopping condition when one is useful.
 
 Each `start_agents` call dispatches one fixed batch of assignments.
 A batch contains one or more supporting assignments and produces one grouped completion notification after every assignment settles.
 A batch groups helpers started together and does not transfer synthesis to them.
-Use multiple helpers only for non-overlapping local questions or intentional independent corroboration.
-The parent does not duplicate delegated work, inspect another evidence branch for the same outcome, or poll helper status.
-When the reports contribute to the current answer, plan, decision, or implementation, the parent finishes the turn after dispatch.
-It continues only a separate user-requested outcome that cannot affect or be affected by the reports.
+Use multiple helpers only for non-overlapping slices or intentional independent corroboration.
+After dispatch, continue non-duplicative work or finish the parent turn so the completion notification can resume it.
 A normal helper closes after it reports its evidence.
 Every child receives a mandatory read-only boundary after any profile-specific instructions.
 If its task requires a state change, it reports that limitation and stops.
@@ -221,7 +218,7 @@ Sending a message to a closed agent resumes its Pi session in a new tab.
 The extension reloads `config.json` and the selected identity file before it starts or resumes a child, so edits apply without reloading the parent Pi session.
 
 Batch completion sends one hidden follow-up message to the parent and triggers a parent turn.
-The message tells the parent to evaluate and connect the evidence itself instead of merely repeating the reports.
+The message tells the parent to evaluate the supporting reports before using them.
 The grouped message contains the latest assistant text from every assignment in that batch, subject to Pi's output limits.
 If text is truncated, the full child conversation remains in the recorded child session file but is not automatically loaded into the parent model context.
 If the parent is active when the batch settles, the extension defers the follow-up until that parent turn settles.
