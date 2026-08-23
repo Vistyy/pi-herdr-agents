@@ -202,15 +202,13 @@ test("a claimed task result is returned, not automatically announced, and its ta
   assert.ok(snapshots.length > 0);
 });
 
-test("a start without an identity uses the enabled default identity", async () => {
+test("a start uses the explicitly selected identity", async () => {
   const fake = new FakeHerdr();
   fake.sessionFile = await childSessionFile();
   const config = testConfig();
   config.identities[0] = {
     ...config.identities[0],
-    name: "default",
-    description: "Default helper.",
-    model: "default-model",
+    model: "selected-model",
   };
   const manager = new AgentManager(
     fake as unknown as HerdrClient,
@@ -222,14 +220,14 @@ test("a start without an identity uses the enabled default identity", async () =
     { persist() {}, notify() {} },
   );
 
-  const record = await manager.start({ name: "check", task: "Check it.", keepOpen: true, cwd: "/repo" });
+  const record = await manager.start({ name: "check", identityName: "reviewer", task: "Check it.", keepOpen: true, cwd: "/repo" });
 
-  assert.equal(record.identity, "default");
+  assert.equal(record.identity, "reviewer");
   const modelIndex = fake.startArgs.indexOf("--model");
-  assert.equal(fake.startArgs[modelIndex + 1], "default-model");
+  assert.equal(fake.startArgs[modelIndex + 1], "selected-model");
 });
 
-test("a start without an identity fails when no default identity is enabled", async () => {
+test("a start rejects an unknown selected identity", async () => {
   const fake = new FakeHerdr();
   fake.sessionFile = await childSessionFile();
   const manager = new AgentManager(
@@ -243,8 +241,8 @@ test("a start without an identity fails when no default identity is enabled", as
   );
 
   await assert.rejects(
-    manager.start({ name: "check", task: "Check it.", keepOpen: true, cwd: "/repo" }),
-    /No enabled "default" identity is configured/,
+    manager.start({ name: "check", identityName: "missing", task: "Check it.", keepOpen: true, cwd: "/repo" }),
+    /Unknown or disabled identity: missing/,
   );
 });
 

@@ -40,7 +40,7 @@ name: fast
 description: Handles small tasks with limited reasoning.
 thinking: low
 skills:
-  - "!session-routing"
+  - "!session-transfer"
   - "-./skills/local"
 ---
 `);
@@ -48,7 +48,7 @@ skills:
   const config = await loadConfig(root);
   assert.deepEqual(config.warnings, []);
   assert.equal(config.identities[0].instructions, undefined);
-  assert.deepEqual(config.identities[0].skills, ["!session-routing", `-${join(root, "agents", "skills", "local")}`]);
+  assert.deepEqual(config.identities[0].skills, ["!session-transfer", `-${join(root, "agents", "skills", "local")}`]);
 });
 
 test("invalid global defaults disable the complete configuration", async () => {

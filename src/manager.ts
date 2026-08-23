@@ -118,7 +118,7 @@ export class AgentManager {
 
   async start(options: {
     name: string;
-    identityName?: string;
+    identityName: string;
     task: string;
     keepOpen: boolean;
     cwd: string;
@@ -795,11 +795,9 @@ export class AgentManager {
     return [...this.records.values()].filter((record) => record.status === "starting" || Boolean(record.paneId)).length;
   }
 
-  private getIdentity(name?: string): AgentIdentity {
-    const resolvedName = name ?? "default";
-    const identity = this.config.identities.find((candidate) => candidate.name === resolvedName);
-    if (!identity && name === undefined) throw new Error('No enabled "default" identity is configured.');
-    if (!identity) throw new Error(`Unknown or disabled identity: ${resolvedName}`);
+  private getIdentity(name: string): AgentIdentity {
+    const identity = this.config.identities.find((candidate) => candidate.name === name);
+    if (!identity) throw new Error(`Unknown or disabled identity: ${name}`);
     return identity;
   }
 

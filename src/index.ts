@@ -171,22 +171,25 @@ function registerTools(pi: ExtensionAPI, config: ExtensionConfig, getManager: ()
   pi.registerTool({
     name: "start_agents",
     label: "Start Agents",
-    description: `Start a fixed batch of one or more temporary read-only Pi helpers in new tabs in the current Herdr workspace. Each helper owns one bounded supporting slice and may inspect connected sources or reason within that slice. Omit identity to use the configured default identity. Returns after each helper either accepts its assignment or fails to start. The parent receives one completion notification after the whole batch settles. Available identities:\n${identityCatalog}`,
-    promptSnippet: "Delegate bounded read-only supporting slices to temporary Pi helpers",
+    description: `Start a fixed batch of one or more temporary read-only Pi helpers in new tabs in the current Herdr workspace. Each helper performs one bounded evidence operation for the parent. The parent, not the helpers, owns and performs the user's work. Returns after each helper either accepts its assignment or fails to start. The parent receives one completion notification after the whole batch settles. Available identities:\n${identityCatalog}`,
+    promptSnippet: "Offload bounded context-heavy evidence operations to temporary Pi helpers",
     promptGuidelines: [
-      "Use start_agents for separable context-heavy source inspection, history or transcript searches, inventories, narrow read-only probes, independent factual checks, and other bounded slices whose reports keep underlying source detail out of the parent context.",
-      "Give each helper one requested local result with relevant anchors, constraints, and a stopping condition when useful. Ask it to identify inspected sources, direct observations, supported inferences, and material unknowns.",
-      "Keep the user outcome, consequential interpretation, cross-cutting decisions, plan and design, synthesis, implementation, final verification, and final response in the parent session.",
-      "Do not duplicate the exact active helper slice. Continue only non-duplicative work that does not depend on its report. Evaluate each report and inspect underlying evidence only for a consequential gap, conflict, unsupported inference, or unclear source.",
-      "When reports become the next dependency, end the parent turn without concluding the user outcome so the completion notification can resume it. Do not poll or resend because a normal temporary helper tab closed.",
+      "Before calling start_agents, frame the user's outcome and identify one separable evidence operation whose file reading, searching, or raw output would otherwise consume substantial parent context. Do not delegate when a handful of short files or one targeted command can provide compact evidence, or when the parent needs the raw evidence to reason correctly.",
+      "Treat start_agents like calling a helper method, not transferring work. Ask for a local evidence result. Never ask a helper to produce the user's plan, design, implementation, recommendation, review verdict, final verification, or answer, and never partition the whole user task among helpers.",
+      "Select the least intensive configured identity whose catalog description matches the evidence operation. Identity complexity changes evidence-processing effort, not ownership or allowable scope.",
+      "Give each helper one requested evidence result with relevant anchors, constraints, and a stopping condition when useful. Ask it to identify inspected sources, direct observations, supported inferences, and material unknowns.",
+      "Keep outcome framing, work decomposition, consequential interpretation, cross-cutting decisions, plan and design, synthesis, implementation, final verification, and user communication in the parent session. The parent must do this work rather than merely route, summarize, or approve helper output.",
+      "Call start_agents as the only tool call in its assistant turn. Do not combine dispatch with read, bash, web, or other evidence-gathering calls. After dispatch, stop the parent run and wait for the completion follow-up.",
+      "Do not inspect or duplicate a dispatched evidence operation while it is active or after its report arrives. Treat the report's cited observations as the evidence returned by the helper call. If required evidence is missing or unclear, send one context-local follow-up to that helper instead of reconstructing its search in the parent.",
+      "Do not poll or resend because a normal temporary helper tab closed.",
     ],
     parameters: Type.Object({
       agents: Type.Array(Type.Object({
-        name: Type.String({ description: "Unique task name matching [a-z][a-z0-9_-]{0,28}" }),
-        identity: Type.Optional(Type.String({ description: `Configured agent identity. Omit to use "default". Available when this session started: ${identityNames.join(", ")}` })),
-        task: Type.String({ description: "One bounded read-only supporting slice and its requested evidence-backed local result. The helper may inspect connected sources and reason within the slice, but must not own the parent outcome, plan or design, or consequential interpretation." }),
+        name: Type.String({ description: "Unique evidence-operation name matching [a-z][a-z0-9_-]{0,28}" }),
+        identity: Type.String({ description: `Required helper identity selected by evidence-operation complexity. Available when this session started: ${identityNames.join(", ")}` }),
+        task: Type.String({ description: "One bounded read-only evidence operation and its requested local result. It may inspect connected sources and reason locally, but it must not produce the parent plan, design, implementation, recommendation, verdict, final verification, or answer." }),
         keep_open: Type.Optional(Type.Boolean({ description: "Keep the agent tab open after completion. Default: false." })),
-      }), { minItems: 1, description: "Fixed batch of agent assignments." }),
+      }), { minItems: 1, description: "Fixed batch of independent evidence operations, not a partition of the user's task." }),
     }),
     async execute(_id, params, signal, _onUpdate, ctx) {
       assertUniqueNames(params.agents.map((agent) => agent.name));
@@ -200,27 +203,28 @@ function registerTools(pi: ExtensionAPI, config: ExtensionConfig, getManager: ()
       }, signal)));
       const records = outcomes.map((outcome, index) => outcome.status === "fulfilled"
         ? outcome.value
-        : failedDispatchRecord(params.agents[index].name, params.agents[index].identity ?? "default", params.agents[index].task, params.agents[index].keep_open ?? false, ctx.cwd, outcome.reason));
+        : failedDispatchRecord(params.agents[index].name, params.agents[index].identity, params.agents[index].task, params.agents[index].keep_open ?? false, ctx.cwd, outcome.reason));
       const batch = manager.batch(records);
       const names = batch.members.map((member) => member.name).join(", ");
-      return batchToolResult(`Started ${batch.id}: ${names}. Continue only independent non-duplicative work. When these reports become the next dependency, finish the parent turn without concluding the user outcome; one notification will resume it after the batch settles.`, records, batch);
+      return batchToolResult(`Started ${batch.id}: ${names}. End this parent run now. Do not inspect or duplicate the dispatched evidence operations. One completion follow-up will resume the parent after the whole batch settles.`, records, batch);
     },
   });
 
   pi.registerTool({
     name: "send_agents",
     label: "Send Agents",
-    description: "Send messages to owned helpers. Guide an active helper within its current bounded slice, or give a settled helper one new bounded read-only supporting slice. Do not mix active guidance and new assignments in one call.",
-    promptSnippet: "Guide an active helper or dispatch its next bounded slice",
+    description: "Send messages to owned helpers. Guide an active evidence operation, or give a settled helper one new bounded read-only evidence operation that benefits from its existing source context. Do not mix active guidance and new assignments in one call.",
+    promptSnippet: "Guide an active evidence operation or reuse its source-local context",
     promptGuidelines: [
-      "Reuse a helper when its existing source context materially helps with guidance inside the active slice or with one new bounded supporting slice.",
-      "Do not broaden an active helper beyond its slice or transfer the parent outcome, consequential interpretation, plan or design, synthesis, implementation, final verification, or final response.",
-      "Do not duplicate the exact active helper slice. Continue non-duplicative parent work, and evaluate each report before using it.",
+      "Use send_agents only when an owned helper's existing source context materially benefits guidance within its active evidence operation or one new source-local evidence operation.",
+      "Do not use send_agents to expand a helper into the user's task or ask for a plan, design, implementation, recommendation, verdict, final verification, or answer.",
+      "Call send_agents as the only tool call in its assistant turn. After sending guidance or a new evidence operation, stop the parent run and wait for settlement.",
+      "Do not inspect or duplicate the helper's evidence operation during or after the assignment. Evaluate the report, and use a context-local follow-up when required evidence is missing or unclear.",
     ],
     parameters: Type.Object({
       agents: Type.Array(Type.Object({
         name: Type.String({ description: "Owned agent task name" }),
-        message: Type.String({ description: "Guidance within the active bounded slice, or one new bounded read-only supporting slice for a settled helper." }),
+        message: Type.String({ description: "Guidance within the active evidence operation, or one new bounded source-local evidence operation for a settled helper. It must not transfer parent-owned work." }),
       }), { minItems: 1, description: "Fixed batch of messages." }),
     }),
     async execute(_id, params, signal) {
@@ -256,12 +260,12 @@ function registerTools(pi: ExtensionAPI, config: ExtensionConfig, getManager: ()
         const text = failures.length > 0
           ? `Guidance completed with errors.\n${failures.join("\n")}`
           : `Guided active assignments: ${returned.map((record) => record.name).join(", ")}.`;
-        return toolResult(text, returned);
+        return terminatingToolResult(text, returned);
       }
 
       const batch = manager.batch(newAssignments);
       const names = batch.members.map((member) => member.name).join(", ");
-      return batchToolResult(`Started ${batch.id}: ${names}. Continue only independent non-duplicative work. When these reports become the next dependency, finish the parent turn without concluding the user outcome; one notification will resume it after the batch settles.`, newAssignments, batch);
+      return batchToolResult(`Started ${batch.id}: ${names}. End this parent run now. Do not inspect or duplicate the dispatched evidence operations. One completion follow-up will resume the parent after the whole batch settles.`, newAssignments, batch);
     },
   });
 
@@ -325,8 +329,12 @@ function toolResult(text: string, records: OwnedAgentRecord[]) {
   return { content: [{ type: "text" as const, text: content }], details: { records } };
 }
 
+function terminatingToolResult(text: string, records: OwnedAgentRecord[]) {
+  return { ...toolResult(text, records), terminate: true };
+}
+
 function batchToolResult(text: string, records: OwnedAgentRecord[], batch: OwnedAgentCollection) {
-  return { content: [{ type: "text" as const, text }], details: { records, batch } };
+  return { content: [{ type: "text" as const, text }], details: { records, batch }, terminate: true };
 }
 
 function assertUniqueNames(names: string[]): void {
@@ -390,9 +398,10 @@ function updateAgentWidget(ctx: ExtensionContext, records: OwnedAgentRecord[]): 
     ctx.ui.setWidget("pi-herdr-agents", undefined);
     return;
   }
-  const items = visible.map((record) =>
-    record.status === "working" ? record.name : `${record.name} (${record.status})`,
-  );
+  const items = visible.map((record) => {
+    const label = `${record.name}[${record.identity}]`;
+    return record.status === "working" ? label : `${label} (${record.status})`;
+  });
   ctx.ui.setWidget("pi-herdr-agents", () => ({
     render(width) {
       return wrapInline("Agents: ", items, width);
@@ -424,12 +433,12 @@ function notificationKey(record: OwnedAgentRecord): string {
 
 function formatNotification(record: OwnedAgentRecord): string {
   const status = record.status === "idle" || record.status === "closed" ? "" : ` (${record.status})`;
-  return `Owned helper ${record.name} settled${status}. Evaluate and connect this evidence yourself; do not merely repeat the report.\n\n${record.lastResult ?? record.lastError ?? "(no result)"}`;
+  return `Owned helper ${record.name} settled${status}. Use this report as evidence while doing the parent-owned work. Do not reconstruct the helper's source inspection in the parent; send a context-local follow-up if required evidence is missing or unclear.\n\n${record.lastResult ?? record.lastError ?? "(no result)"}`;
 }
 
 function formatCollectionNotification(collection: OwnedAgentCollection): string {
   const records = collection.members.flatMap((member) => member.result ? [member.result] : []);
-  const text = `Owned helper batch ${collection.id} settled. Evaluate and connect this evidence yourself; do not merely repeat the reports.\n\n${formatResults(records)}`;
+  const text = `Owned helper batch ${collection.id} settled. Use these reports as evidence while doing the parent-owned work. Do not reconstruct their source inspection in the parent; send a context-local follow-up if required evidence is missing or unclear.\n\n${formatResults(records)}`;
   const truncated = truncateHead(text, { maxBytes: DEFAULT_MAX_BYTES, maxLines: DEFAULT_MAX_LINES });
   return truncated.truncated
     ? `${truncated.content}\n\n[Batch output truncated. Full individual results remain in the child Pi session files.]`

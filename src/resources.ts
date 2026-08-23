@@ -13,7 +13,7 @@ const DELEGATION_TOOLS = new Set([
   "interrupt_agent",
   "close_agent",
 ]);
-const DELEGATION_SKILLS = new Set(["herdr", "session-routing"]);
+const DELEGATION_SKILLS = new Set(["herdr", "session-transfer"]);
 
 interface SelectableResource {
   value: string;

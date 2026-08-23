@@ -23,7 +23,7 @@ const inherited = {
   skills: [
     { value: "/skills/review/SKILL.md", aliases: ["review", "/skills/review/SKILL.md"] },
     { value: "/skills/herdr/SKILL.md", aliases: ["herdr", "/skills/herdr/SKILL.md"] },
-    { value: "/skills/session-routing/SKILL.md", aliases: ["session-routing", "/skills/session-routing/SKILL.md"] },
+    { value: "/skills/session-transfer/SKILL.md", aliases: ["session-transfer", "/skills/session-transfer/SKILL.md"] },
   ],
 };
 
@@ -32,7 +32,7 @@ test("resource selectors apply defaults before identity filters", () => {
     identity: identity({
       tools: ["read", "+edit"],
       extensions: ["alpha"],
-      skills: ["+session-routing"],
+      skills: ["+session-transfer"],
     }),
     defaults: {
       tools: ["!edit"],
@@ -70,7 +70,7 @@ test("delegation tools and skills are unavailable even when force-included", () 
   const resolved = resolveRuntimeSettings({
     identity: identity({
       tools: ["+start_agents", "+send_agents", "+read"],
-      skills: ["+herdr", "+session-routing", "+review"],
+      skills: ["+herdr", "+session-transfer", "+review"],
     }),
     defaults: { tools: [], skills: [] },
     parent: {},
