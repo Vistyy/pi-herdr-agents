@@ -171,22 +171,22 @@ function registerTools(pi: ExtensionAPI, config: ExtensionConfig, getManager: ()
   pi.registerTool({
     name: "start_agents",
     label: "Start Agents",
-    description: `Start a fixed batch of one or more temporary read-only Pi helpers in new tabs in the current Herdr workspace. Each task names one source-local unknown and asks one factual question about a specific component, operation, invariant, or source relationship. Partition a batch by behavior or claim, never by repository area such as implementation, tests, or documentation. A helper does not assess a whole branch, suite, documentation set, investigation, plan, or recommendation. Returns after each helper either accepts its assignment or fails to start. The parent receives one completion notification after the whole batch settles. Available identities:\n${identityCatalog}`,
+    description: `Start a fixed batch of one or more temporary read-only Pi helpers in new tabs in the current Herdr workspace. Each task asks one bounded factual evidence question about a specific component, operation, invariant, or source relationship. Partition a batch by behavior or claim, never by repository area such as implementation, tests, or documentation. A helper does not assess a whole branch, suite, documentation set, investigation, plan, or recommendation. Returns after each helper either accepts its assignment or fails to start. The parent receives one completion notification after the whole batch settles. Available identities:\n${identityCatalog}`,
     promptSnippet: "Delegate source-local questions to temporary Pi helpers",
     promptGuidelines: [
-      "For an investigation, explanation, feasibility judgment, or plan: (1) identify source-local unknowns without reading their answering sources, (2) delegate each unknown as one factual local question, (3) end the turn immediately after dispatch, and (4) connect the reports and make the overall judgment yourself.",
-      "A valid task names exactly one unknown and asks how one specific component, operation, invariant, or source relationship behaves. Do not bundle concerns or ask a helper to assess, review, plan, recommend, or identify material gaps.",
+      "Use start_agents for a factual evidence question whose retrieval is independently answerable and source-heavy, specialized, parallelizable, or likely to crowd the parent context. Inspect small local evidence directly.",
+      "A valid task asks one bounded question about how a specific component, operation, invariant, or source relationship behaves. Do not bundle unrelated concerns or ask a helper to assess, review, plan, recommend, or identify material gaps for the overall outcome.",
       "Partition a batch by behavior or claim, never into implementation, test, and documentation branches. A local question may inspect connected sources when they all answer that question.",
       "Use one batch for the non-overlapping local questions needed by the same reasoning step. Use duplicate scopes only for intentional corroboration.",
       "The parent owns implementation, final verification, consequential decisions, synthesis, recommendations, and the final response.",
-      "After start_agents returns, do not call another tool or inspect any source. End the turn and wait for the batch completion follow-up.",
+      "Do not duplicate delegated work, inspect another evidence branch for the same outcome, or poll helper status. If the reports contribute to the current answer, plan, decision, or implementation, end the turn after dispatch. Continue only a separate user-requested outcome that cannot affect or be affected by the reports.",
       "After reports arrive, do not re-read delegated sources unless an exact conflict or synthesis question requires it.",
     ],
     parameters: Type.Object({
       agents: Type.Array(Type.Object({
         name: Type.String({ description: "Unique task name matching [a-z][a-z0-9_-]{0,28}" }),
         identity: Type.String({ description: `Configured agent identity. Available when this session started: ${identityNames.join(", ")}` }),
-        task: Type.String({ description: "Exactly one factual read-only question about one named component, operation, invariant, or source relationship. Partition by behavior or claim, not by implementation, tests, or documentation. Request evidence, not assessment, review, gap analysis, planning, or recommendation." }),
+        task: Type.String({ description: "One bounded factual read-only evidence question about a named component, operation, invariant, or source relationship. Partition by behavior or claim, not by implementation, tests, or documentation. Request evidence, not assessment, planning, or recommendation for the overall outcome." }),
         keep_open: Type.Optional(Type.Boolean({ description: "Keep the agent tab open after completion. Default: false." })),
       }), { minItems: 1, description: "Fixed batch of agent assignments." }),
     }),
@@ -205,26 +205,26 @@ function registerTools(pi: ExtensionAPI, config: ExtensionConfig, getManager: ()
         : failedDispatchRecord(params.agents[index].name, params.agents[index].identity, params.agents[index].task, params.agents[index].keep_open ?? false, ctx.cwd, outcome.reason));
       const batch = manager.batch(records);
       const names = batch.members.map((member) => member.name).join(", ");
-      return batchToolResult(`Started ${batch.id}: ${names}. End this turn now. Do not call another tool or inspect sources before the batch completion follow-up arrives.`, records, batch);
+      return batchToolResult(`Started ${batch.id}: ${names}. If these reports contribute to the current outcome, end this turn now. Do not inspect another evidence branch for that outcome or poll status. Continue only a separate user-requested outcome that cannot affect or be affected by the reports.`, records, batch);
     },
   });
 
   pi.registerTool({
     name: "send_agents",
     label: "Send Agents",
-    description: "Send messages to owned helpers. Guide an active helper within its current factual local question, or give a settled helper exactly one new factual local question. Partition work by behavior or claim, not by implementation, tests, or documentation. A message must not broaden into an assessment, review, gap analysis, plan, or recommendation. Do not mix active guidance and new assignments in one call.",
+    description: "Send messages to owned helpers. Guide an active helper within its current factual local question, or give a settled helper one new bounded factual local question. Partition work by behavior or claim, not by implementation, tests, or documentation. A message must not broaden into an assessment, review, gap analysis, plan, or recommendation. Do not mix active guidance and new assignments in one call.",
     promptSnippet: "Guide a local question or dispatch its next assignment",
     promptGuidelines: [
       "Reuse a helper when its existing source context materially helps answer the current factual local question or one new factual local question.",
-      "Do not broaden a helper, bundle concerns, or request an assessment, review, gap analysis, plan, or recommendation.",
+      "Do not broaden a helper, bundle unrelated concerns, or request an assessment, plan, or recommendation for the overall outcome.",
       "Partition work by behavior or claim, never into implementation, test, and documentation branches. Use one batch for non-overlapping local questions needed by the same reasoning step.",
-      "After a new assignment starts, do not call another tool or inspect any source. End the turn and wait for the batch completion follow-up.",
+      "Do not duplicate delegated work, inspect another evidence branch for the same outcome, or poll helper status. If a new report contributes to the current answer, plan, decision, or implementation, end the turn after dispatch. Continue only a separate user-requested outcome that cannot affect or be affected by the report.",
       "The parent evaluates and connects reports, owns all consequential judgments, and does not re-read delegated sources without an exact conflict or synthesis need.",
     ],
     parameters: Type.Object({
       agents: Type.Array(Type.Object({
         name: Type.String({ description: "Owned agent task name" }),
-        message: Type.String({ description: "Guidance within the active factual local question, or exactly one new factual local question for a settled helper. Partition by behavior or claim. Do not request assessment, review, gap analysis, planning, or recommendation." }),
+        message: Type.String({ description: "Guidance within the active factual local question, or one new bounded factual local question for a settled helper. Partition by behavior or claim. Do not request assessment, planning, or recommendation for the overall outcome." }),
       }), { minItems: 1, description: "Fixed batch of messages." }),
     }),
     async execute(_id, params, signal) {
@@ -265,7 +265,7 @@ function registerTools(pi: ExtensionAPI, config: ExtensionConfig, getManager: ()
 
       const batch = manager.batch(newAssignments);
       const names = batch.members.map((member) => member.name).join(", ");
-      return batchToolResult(`Started ${batch.id}: ${names}. End this turn now. Do not call another tool or inspect sources before the batch completion follow-up arrives.`, newAssignments, batch);
+      return batchToolResult(`Started ${batch.id}: ${names}. If these reports contribute to the current outcome, end this turn now. Do not inspect another evidence branch for that outcome or poll status. Continue only a separate user-requested outcome that cannot affect or be affected by the reports.`, newAssignments, batch);
     },
   });
 
