@@ -2,11 +2,17 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { composeChildSystemPrompt } from "../src/child-prompt.js";
 
-test("frontmatter-only profiles receive the read-only boundary and reporting instructions", () => {
+test("frontmatter-only profiles receive the narrow helper role and read-only boundary", () => {
   const prompt = composeChildSystemPrompt();
 
-  assert.match(prompt, /temporary managed agent/);
-  assert.match(prompt, /Complete only the bounded assignment/);
+  assert.match(prompt, /temporary read-only helper/);
+  assert.match(prompt, /small, explicitly bounded supporting task/);
+  assert.match(prompt, /one local question/);
+  assert.match(prompt, /Do not take ownership of the overall investigation.*final recommendation.*synthesis/);
+  assert.match(prompt, /compact observations or extracted evidence/);
+  assert.match(prompt, /exact source paths and relevant identifiers or anchors/);
+  assert.match(prompt, /verified facts from supported inferences/);
+  assert.match(prompt, /authoritative conclusion or decision/);
   assert.match(prompt, /Do not create, edit, delete, or overwrite files/);
   assert.match(prompt, /Stopping with a clear report is a successful result/);
   assert.match(prompt, /Do not guess or hide uncertainty/);
@@ -14,7 +20,6 @@ test("frontmatter-only profiles receive the read-only boundary and reporting ins
   assert.match(prompt, /evidence does not establish one answer.*report the limitation/);
   assert.match(prompt, /sources conflict without an established authority.*end with the question: Which source controls/);
   assert.match(prompt, /specific question or decision needed from the parent/);
-  assert.match(prompt, /Lead with the result or recommendation/);
   assert.doesNotMatch(prompt, /Profile-specific instructions/);
 });
 

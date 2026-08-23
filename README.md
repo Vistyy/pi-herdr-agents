@@ -1,10 +1,13 @@
 # pi-herdr-agents
 
-`@vistyy/pi-herdr-agents` gives a Pi session owned, resumable agents in separate tabs of its current Herdr workspace.
+`@vistyy/pi-herdr-agents` provides a Pi session with owned, resumable read-only helpers in separate tabs of its current Herdr workspace.
 
-An **agent identity** is global configuration that describes when an agent is useful and can customize its runtime settings, inherited resources, and role instructions.
+A temporary helper performs one small, explicitly bounded supporting task and returns evidence for its parent to evaluate.
+The parent retains the overall investigation, consequential judgment, synthesis, and user communication.
 
-An **owned agent** is a resumable Pi session created from an agent identity and owned by one parent Pi session.
+An **agent identity** is global configuration that describes a helper's narrow role and can customize its runtime settings, inherited resources, and role instructions.
+
+An **owned agent** is a resumable helper Pi session created from an agent identity and owned by one parent Pi session.
 
 Each managed child keeps its canonical Herdr ownership name (`oa-*`).
 Each caller-provided `start_agents.agents[].name` is published separately as Herdr's display-only agent metadata through the `pi-herdr-agents` metadata source.
@@ -33,7 +36,7 @@ It does not fall back to unmanaged child processes.
 Install a released version from GitHub:
 
 ```sh
-pi install git:github.com/Vistyy/pi-herdr-agents@v0.2.1
+pi install git:github.com/Vistyy/pi-herdr-agents@v0.2.2
 ```
 
 Install a local checkout:
@@ -52,7 +55,7 @@ Configuration is global under:
 ~/.pi/agent/pi-herdr-agents/
 ├── config.json
 └── agents/
-    └── reviewer.md
+    └── helper.md
 ```
 
 Set `PI_CODING_AGENT_DIR` to move the Pi agent directory.
@@ -87,8 +90,8 @@ All runtime fields and the Markdown body are optional.
 
 ```md
 ---
-name: reviewer
-description: Reviews a bounded concern when independent analysis can reduce the parent session's context load.
+name: helper
+description: Checks one small, explicitly bounded question and returns evidence for parent evaluation.
 thinking: high
 skills:
   - verification
@@ -104,8 +107,8 @@ A Markdown body supplies identity-specific instructions:
 
 ```md
 ---
-name: library-researcher
-description: Researches a bounded decision about an installed library using version-specific evidence and official guidance.
+name: library-evidence
+description: Checks one precise question about an installed or selected library and returns version-matched evidence.
 model: gpt-5.6-luna
 thinking: high
 tools:
@@ -116,7 +119,8 @@ tools:
 ---
 
 Establish the installed library version before making compatibility claims.
-Prefer official documentation and repository evidence.
+Return exact sources, verified facts, and evidence limits.
+Do not select the library or own the design decision.
 ```
 
 The body is appended to Pi's default coding prompt.
@@ -183,19 +187,22 @@ This keeps parent-only delegation policy and controls out of child prompts.
 
 The extension registers the five delegation tools above when at least one valid identity exists.
 
-Each owned agent opens in a new tab in the parent session's current Herdr workspace and uses the parent's working directory.
+Each owned helper opens in a new tab in the parent session's current Herdr workspace and uses the parent's working directory.
 The extension does not create Git worktrees or enforce read-only access.
-Its tool guidance delegates bounded read-only work only when doing so provides a material benefit.
-The parent retains implementation, mutation, outcome framing, cross-cutting decisions, synthesis, evidence checks, and user communication.
-A delegated investigation has one owner, and concurrent scopes do not overlap unless independent corroboration is intentional.
-Each assignment states one requested result, relevant starting anchors, known constraints, a stopping condition, and the evidence the parent needs.
+Its tool guidance delegates only small, explicitly bounded, read-only supporting tasks when doing so provides a material benefit.
+A helper can inspect several connected sources when necessary to answer one precise local question.
+A helper does not own the overall investigation, holistic review, design choice, governing explanation, final recommendation, synthesis, or user communication.
+The parent evaluates every helper report as a subordinate evidence input and retains all consequential judgment.
+Concurrent helper scopes do not overlap unless independent corroboration is intentional.
+Each assignment states one requested evidence result, relevant starting anchors, known constraints, a stopping condition, and the evidence the parent needs.
 
 Each `start_agents` call dispatches one fixed batch of assignments.
-A batch contains one or more assignments and produces one grouped completion notification after every assignment settles.
-Put assignments that require one synthesis in the same call.
+A batch contains one or more supporting assignments and produces one grouped completion notification after every assignment settles.
+A batch groups helpers started together and does not transfer synthesis to them.
+Use multiple helpers only for non-overlapping scopes or intentional independent corroboration.
 Continue useful independent work after dispatch.
 If no independent work remains, finish the parent turn so the batch completion notification can resume it.
-A normal task agent closes after it reports its result.
+A normal helper closes after it reports its evidence.
 Every child receives a mandatory read-only boundary after any profile-specific instructions.
 It must stop and report when continuing requires a guess, hidden uncertainty, broader scope, mutation, or a parent decision.
 This includes asking which source controls when conflicting evidence has no established authority.
@@ -213,6 +220,7 @@ Sending a message to a closed agent resumes its Pi session in a new tab.
 The extension reloads `config.json` and the selected identity file before it starts or resumes a child, so edits apply without reloading the parent Pi session.
 
 Batch completion sends one hidden follow-up message to the parent and triggers a parent turn.
+The message explicitly identifies the reports as subordinate evidence inputs that require parent evaluation.
 The grouped message contains the latest assistant text from every assignment in that batch, subject to Pi's output limits.
 If text is truncated, the full child conversation remains in the recorded child session file but is not automatically loaded into the parent model context.
 If the parent is active when the batch settles, the extension defers the follow-up until that parent turn settles.

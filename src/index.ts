@@ -171,21 +171,22 @@ function registerTools(pi: ExtensionAPI, config: ExtensionConfig, getManager: ()
   pi.registerTool({
     name: "start_agents",
     label: "Start Agents",
-    description: `Start a fixed batch of one or more temporary owned Pi agents in new tabs in the current Herdr workspace. Returns after each agent either accepts its assignment or fails to start. The parent receives one completion notification after the whole batch settles. Available identities:\n${identityCatalog}`,
-    promptSnippet: "Start one fixed batch of temporary Pi agents",
+    description: `Start a fixed batch of one or more temporary read-only Pi helpers in new tabs in the current Herdr workspace. Each helper performs one small supporting task and returns evidence for parent evaluation. Returns after each helper either accepts its assignment or fails to start. The parent receives one completion notification after the whole batch settles. Available identities:\n${identityCatalog}`,
+    promptSnippet: "Start one fixed batch of temporary Pi helpers",
     promptGuidelines: [
-      "Use start_agents only for bounded read-only deliverables when delegation materially reduces parent context load, enables useful independent progress, or provides justified corroboration.",
-      "Put assignments that require one synthesis in the same call. A one-agent batch is valid.",
-      "Give each assignment one requested result, relevant starting anchors, known constraints, a stopping condition, and the evidence the parent needs.",
+      "Use start_agents only when one or more small, explicitly bounded, read-only supporting tasks materially reduce parent context load, enable useful independent progress, or provide justified corroboration.",
+      "A helper may inspect several connected sources to answer one precise local question. Do not delegate the overall investigation, holistic review, design choice, governing explanation, or final recommendation.",
+      "Give each assignment one requested evidence result, relevant starting anchors, known constraints, a stopping condition, and the evidence the parent needs.",
       "Keep implementation, mutation, outcome framing, cross-cutting decisions, synthesis, and user communication in the parent session.",
+      "A batch only groups helper tasks started together. Use multiple helpers only for non-overlapping scopes or intentional independent corroboration. A one-helper batch is valid.",
       "After dispatch, continue useful independent work or finish the parent turn so the batch completion notification can resume it.",
-      "Do not duplicate an active agent's scope. Give concurrent agents non-overlapping scopes unless independent corroboration is intentional.",
+      "Treat every helper report as a subordinate evidence input that requires parent evaluation.",
     ],
     parameters: Type.Object({
       agents: Type.Array(Type.Object({
         name: Type.String({ description: "Unique task name matching [a-z][a-z0-9_-]{0,28}" }),
         identity: Type.String({ description: `Configured agent identity. Available when this session started: ${identityNames.join(", ")}` }),
-        task: Type.String({ description: "Concrete assignment and expected result" }),
+        task: Type.String({ description: "One small, concrete read-only supporting task and requested evidence" }),
         keep_open: Type.Optional(Type.Boolean({ description: "Keep the agent tab open after completion. Default: false." })),
       }), { minItems: 1, description: "Fixed batch of agent assignments." }),
     }),
@@ -211,13 +212,15 @@ function registerTools(pi: ExtensionAPI, config: ExtensionConfig, getManager: ()
   pi.registerTool({
     name: "send_agents",
     label: "Send Agents",
-    description: "Send a fixed batch of one or more messages to owned agents. Messages to active agents guide their current assignments and remain in their existing batches. Messages to settled agents start a new assignment batch. Do not mix active guidance and new assignments in one call.",
-    promptSnippet: "Guide active agents or dispatch their next assignment batch",
+    description: "Send a fixed batch of one or more messages to owned helpers. Messages to active helpers guide their current assignments and remain in their existing batches. Messages to settled helpers start a new assignment batch. Do not mix active guidance and new assignments in one call.",
+    promptSnippet: "Guide active helpers or dispatch their next assignment batch",
     promptGuidelines: [
-      "Use send_agents only for bounded read-only messages when reusing owned agents' existing session context provides a material benefit.",
-      "Put new assignments that require one synthesis in the same call. A one-agent batch is valid.",
-      "A message sent during active work must guide its current scope. A message sent after settlement starts the next assignment and a new batch.",
+      "Use send_agents only for small, explicitly bounded, read-only supporting messages when reusing an owned helper's existing session context provides a material benefit.",
+      "Do not broaden a helper into the overall investigation, holistic review, design choice, governing explanation, or final recommendation.",
+      "A message sent during active work must guide its current scope. A message sent after settlement starts one new supporting assignment and a new batch.",
+      "Use multiple helpers only for non-overlapping scopes or intentional independent corroboration. A one-helper batch is valid.",
       "After dispatch, continue useful independent work or finish the parent turn so the batch completion notification can resume it.",
+      "Treat every helper report as a subordinate evidence input that requires parent evaluation.",
     ],
     parameters: Type.Object({
       agents: Type.Array(Type.Object({
@@ -422,12 +425,12 @@ function notificationKey(record: OwnedAgentRecord): string {
 
 function formatNotification(record: OwnedAgentRecord): string {
   const status = record.status === "idle" || record.status === "closed" ? "" : ` (${record.status})`;
-  return `Owned agent ${record.name} settled${status}.\n\n${record.lastResult ?? record.lastError ?? "(no result)"}`;
+  return `Owned helper ${record.name} settled${status}. Its report is a subordinate evidence input for parent evaluation, not an authoritative conclusion.\n\n${record.lastResult ?? record.lastError ?? "(no result)"}`;
 }
 
 function formatCollectionNotification(collection: OwnedAgentCollection): string {
   const records = collection.members.flatMap((member) => member.result ? [member.result] : []);
-  const text = `Owned agent batch ${collection.id} settled.\n\n${formatResults(records)}`;
+  const text = `Owned helper batch ${collection.id} settled. These reports are subordinate evidence inputs for parent evaluation, not authoritative conclusions.\n\n${formatResults(records)}`;
   const truncated = truncateHead(text, { maxBytes: DEFAULT_MAX_BYTES, maxLines: DEFAULT_MAX_LINES });
   return truncated.truncated
     ? `${truncated.content}\n\n[Batch output truncated. Full individual results remain in the child Pi session files.]`
