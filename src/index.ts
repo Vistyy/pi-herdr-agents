@@ -164,32 +164,22 @@ export default async function piHerdrAgents(pi: ExtensionAPI): Promise<void> {
   });
 }
 
-function registerTools(pi: ExtensionAPI, config: ExtensionConfig, getManager: () => AgentManager): void {
+export function registerTools(pi: ExtensionAPI, config: ExtensionConfig, getManager: () => AgentManager): void {
   const identityNames = config.identities.map((identity) => identity.name);
   const identityCatalog = config.identities.map((identity) => `${identity.name}: ${identity.description}`).join("\n");
 
   pi.registerTool({
     name: "start_agents",
     label: "Start Agents",
-    description: `Start a fixed batch of one or more temporary read-only Pi helpers in new tabs in the current Herdr workspace. Each helper performs one bounded evidence operation for the parent. The parent, not the helpers, owns and performs the user's work. Returns after each helper either accepts its assignment or fails to start. The parent receives one completion notification after the whole batch settles. Available identities:\n${identityCatalog}`,
-    promptSnippet: "Offload bounded context-heavy evidence operations to temporary Pi helpers",
-    promptGuidelines: [
-      "Before calling start_agents, frame the user's outcome and identify one separable evidence operation whose file reading, searching, or raw output would otherwise consume substantial parent context. Do not delegate when a handful of short files or one targeted command can provide compact evidence, or when the parent needs the raw evidence to reason correctly.",
-      "Treat start_agents like calling a helper method, not transferring work. Ask for a local evidence result. Never ask a helper to produce the user's plan, design, implementation, recommendation, review verdict, final verification, or answer, and never partition the whole user task among helpers.",
-      "Select the least intensive configured identity whose catalog description matches the evidence operation. Identity complexity changes evidence-processing effort, not ownership or allowable scope.",
-      "Give each helper one requested evidence result with relevant anchors, constraints, and a stopping condition when useful. Ask it to identify inspected sources, direct observations, supported inferences, and material unknowns.",
-      "Keep outcome framing, work decomposition, consequential interpretation, cross-cutting decisions, plan and design, synthesis, implementation, final verification, and user communication in the parent session. The parent must do this work rather than merely route, summarize, or approve helper output.",
-      "Call start_agents as the only tool call in its assistant turn. Do not combine dispatch with read, bash, web, or other evidence-gathering calls. After dispatch, stop the parent run and wait for the completion follow-up.",
-      "Do not inspect or duplicate a dispatched evidence operation while it is active or after its report arrives. Treat the report's cited observations as the evidence returned by the helper call. If required evidence is missing or unclear, send one context-local follow-up to that helper instead of reconstructing its search in the parent.",
-      "Do not poll or resend because a normal temporary helper tab closed.",
-    ],
+    description: `Start a fixed batch of one or more owned read-only Pi agents in new tabs in the current Herdr workspace. Returns after each agent either accepts its assignment or fails to start. One completion follow-up arrives after the whole batch settles. Available identities:\n${identityCatalog}`,
+    promptSnippet: "Start owned read-only Pi agents in Herdr tabs",
     parameters: Type.Object({
       agents: Type.Array(Type.Object({
-        name: Type.String({ description: "Unique evidence-operation name matching [a-z][a-z0-9_-]{0,28}" }),
-        identity: Type.String({ description: `Required helper identity selected by evidence-operation complexity. Available when this session started: ${identityNames.join(", ")}` }),
-        task: Type.String({ description: "One bounded read-only evidence operation and its requested local result. It may inspect connected sources and reason locally, but it must not produce the parent plan, design, implementation, recommendation, verdict, final verification, or answer." }),
+        name: Type.String({ description: "Unique agent name matching [a-z][a-z0-9_-]{0,28}" }),
+        identity: Type.String({ description: `Configured agent identity. Available when this session started: ${identityNames.join(", ")}` }),
+        task: Type.String({ description: "Assignment sent to the agent as a user message" }),
         keep_open: Type.Optional(Type.Boolean({ description: "Keep the agent tab open after completion. Default: false." })),
-      }), { minItems: 1, description: "Fixed batch of independent evidence operations, not a partition of the user's task." }),
+      }), { minItems: 1, description: "Fixed batch of agent assignments." }),
     }),
     async execute(_id, params, signal, _onUpdate, ctx) {
       assertUniqueNames(params.agents.map((agent) => agent.name));
@@ -206,25 +196,19 @@ function registerTools(pi: ExtensionAPI, config: ExtensionConfig, getManager: ()
         : failedDispatchRecord(params.agents[index].name, params.agents[index].identity, params.agents[index].task, params.agents[index].keep_open ?? false, ctx.cwd, outcome.reason));
       const batch = manager.batch(records);
       const names = batch.members.map((member) => member.name).join(", ");
-      return batchToolResult(`Started ${batch.id}: ${names}. End this parent run now. Do not inspect or duplicate the dispatched evidence operations. One completion follow-up will resume the parent after the whole batch settles.`, records, batch);
+      return batchToolResult(`Started ${batch.id}: ${names}. One completion follow-up will arrive after the batch settles.`, records, batch);
     },
   });
 
   pi.registerTool({
     name: "send_agents",
     label: "Send Agents",
-    description: "Send messages to owned helpers. Guide an active evidence operation, or give a settled helper one new bounded read-only evidence operation that benefits from its existing source context. Do not mix active guidance and new assignments in one call.",
-    promptSnippet: "Guide an active evidence operation or reuse its source-local context",
-    promptGuidelines: [
-      "Use send_agents only when an owned helper's existing source context materially benefits guidance within its active evidence operation or one new source-local evidence operation.",
-      "Do not use send_agents to expand a helper into the user's task or ask for a plan, design, implementation, recommendation, verdict, final verification, or answer.",
-      "Call send_agents as the only tool call in its assistant turn. After sending guidance or a new evidence operation, stop the parent run and wait for settlement.",
-      "Do not inspect or duplicate the helper's evidence operation during or after the assignment. Evaluate the report, and use a context-local follow-up when required evidence is missing or unclear.",
-    ],
+    description: "Send messages to owned agents. Messages guide active assignments or start new assignments for settled agents. Do not mix active guidance and new assignments in one call.",
+    promptSnippet: "Send messages to owned agents",
     parameters: Type.Object({
       agents: Type.Array(Type.Object({
-        name: Type.String({ description: "Owned agent task name" }),
-        message: Type.String({ description: "Guidance within the active evidence operation, or one new bounded source-local evidence operation for a settled helper. It must not transfer parent-owned work." }),
+        name: Type.String({ description: "Owned agent name" }),
+        message: Type.String({ description: "Message sent to the agent" }),
       }), { minItems: 1, description: "Fixed batch of messages." }),
     }),
     async execute(_id, params, signal) {
@@ -260,12 +244,12 @@ function registerTools(pi: ExtensionAPI, config: ExtensionConfig, getManager: ()
         const text = failures.length > 0
           ? `Guidance completed with errors.\n${failures.join("\n")}`
           : `Guided active assignments: ${returned.map((record) => record.name).join(", ")}.`;
-        return terminatingToolResult(text, returned);
+        return toolResult(text, returned);
       }
 
       const batch = manager.batch(newAssignments);
       const names = batch.members.map((member) => member.name).join(", ");
-      return batchToolResult(`Started ${batch.id}: ${names}. End this parent run now. Do not inspect or duplicate the dispatched evidence operations. One completion follow-up will resume the parent after the whole batch settles.`, newAssignments, batch);
+      return batchToolResult(`Started ${batch.id}: ${names}. One completion follow-up will arrive after the batch settles.`, newAssignments, batch);
     },
   });
 
@@ -329,12 +313,8 @@ function toolResult(text: string, records: OwnedAgentRecord[]) {
   return { content: [{ type: "text" as const, text: content }], details: { records } };
 }
 
-function terminatingToolResult(text: string, records: OwnedAgentRecord[]) {
-  return { ...toolResult(text, records), terminate: true };
-}
-
 function batchToolResult(text: string, records: OwnedAgentRecord[], batch: OwnedAgentCollection) {
-  return { content: [{ type: "text" as const, text }], details: { records, batch }, terminate: true };
+  return { content: [{ type: "text" as const, text }], details: { records, batch } };
 }
 
 function assertUniqueNames(names: string[]): void {
@@ -431,14 +411,14 @@ function notificationKey(record: OwnedAgentRecord): string {
   return `${record.name}:${record.assignment}`;
 }
 
-function formatNotification(record: OwnedAgentRecord): string {
+export function formatNotification(record: OwnedAgentRecord): string {
   const status = record.status === "idle" || record.status === "closed" ? "" : ` (${record.status})`;
-  return `Owned helper ${record.name} settled${status}. Use this report as evidence while doing the parent-owned work. Do not reconstruct the helper's source inspection in the parent; send a context-local follow-up if required evidence is missing or unclear.\n\n${record.lastResult ?? record.lastError ?? "(no result)"}`;
+  return `Owned agent ${record.name} settled${status}.\n\n${record.lastResult ?? record.lastError ?? "(no result)"}`;
 }
 
-function formatCollectionNotification(collection: OwnedAgentCollection): string {
+export function formatCollectionNotification(collection: OwnedAgentCollection): string {
   const records = collection.members.flatMap((member) => member.result ? [member.result] : []);
-  const text = `Owned helper batch ${collection.id} settled. Use these reports as evidence while doing the parent-owned work. Do not reconstruct their source inspection in the parent; send a context-local follow-up if required evidence is missing or unclear.\n\n${formatResults(records)}`;
+  const text = `Owned agent batch ${collection.id} settled.\n\n${formatResults(records)}`;
   const truncated = truncateHead(text, { maxBytes: DEFAULT_MAX_BYTES, maxLines: DEFAULT_MAX_LINES });
   return truncated.truncated
     ? `${truncated.content}\n\n[Batch output truncated. Full individual results remain in the child Pi session files.]`

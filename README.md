@@ -1,14 +1,13 @@
 # pi-herdr-agents
 
-`@vistyy/pi-herdr-agents` provides a Pi session with owned, resumable read-only helpers in separate tabs of its current Herdr workspace.
+`@vistyy/pi-herdr-agents` provides a Pi session with owned, resumable read-only agents in separate tabs of its current Herdr workspace.
 
-A temporary helper performs one bounded context-heavy evidence operation and returns a local result for its parent to evaluate.
-The helper is analogous to a helper method called by the parent.
-The parent owns and performs the user's work, including decomposition, consequential judgment, planning, design, implementation, synthesis, final verification, and communication.
+The extension owns agent launch, messaging, lifecycle, resource selection, and completion delivery.
+External instructions own delegation and orchestration policy.
 
-An **agent identity** is global configuration that describes a helper's narrow role and can customize its runtime settings, inherited resources, and role instructions.
+An **agent identity** is global configuration that selects runtime settings, inherited resources, and optional stable instructions.
 
-An **owned agent** is a resumable helper Pi session created from an agent identity and owned by one parent Pi session.
+An **owned agent** is a resumable Pi session created from an agent identity and owned by one parent Pi session.
 
 Each managed child keeps its canonical Herdr ownership name (`oa-*`).
 Each caller-provided `start_agents.agents[].name` is published separately as Herdr's display-only agent metadata through the `pi-herdr-agents` metadata source.
@@ -56,7 +55,7 @@ Configuration is global under:
 ~/.pi/agent/pi-herdr-agents/
 ├── config.json
 └── agents/
-    └── helper.md
+    └── analysis.md
 ```
 
 Set `PI_CODING_AGENT_DIR` to move the Pi agent directory.
@@ -91,8 +90,8 @@ All runtime fields and the Markdown body are optional.
 
 ```md
 ---
-name: balanced
-description: Use for one bounded context-heavy evidence operation across connected sources.
+name: analysis
+description: Use for read-only analysis with additional reasoning effort.
 thinking: high
 tools:
   - "!edit"
@@ -101,8 +100,8 @@ tools:
 ```
 
 The `name` must match `[a-z][a-z0-9_-]{0,63}`.
-Every assignment must select an identity explicitly.
-The `description` tells the parent which evidence-operation complexity or specialization the identity handles.
+Every assignment selects an identity explicitly.
+The `description` tells the parent what stable runtime capability or specialist method the identity provides.
 
 A Markdown body supplies identity-specific instructions:
 
@@ -173,7 +172,7 @@ Relative extension and skill paths in `config.json` resolve from the configurati
 Relative paths in an identity resolve from that identity file's directory.
 A leading `~/` resolves from the home directory.
 
-The delegation extension, the global `herdr` and `session-transfer` skills, and these delegation tools are always excluded from children:
+This extension, the global `herdr` and `session-transfer` skills, and these agent-management tools are always excluded from children:
 
 - `start_agents`
 - `send_agents`
@@ -182,55 +181,34 @@ The delegation extension, the global `herdr` and `session-transfer` skills, and 
 - `close_agent`
 
 Filters cannot force-include these resources.
-This keeps parent-only delegation policy and controls out of child prompts.
+This prevents children from recursively launching owned agents or transferring sessions.
 
 ## Agent behavior
 
-The extension registers the five delegation tools above when at least one valid identity exists.
+The extension registers the five agent tools above when at least one valid identity exists.
 
-Each owned helper opens in a new tab in the parent session's current Herdr workspace and uses the parent's working directory.
-The extension does not create Git worktrees or enforce read-only access.
-A helper performs one bounded read-only evidence operation.
-The operation can include connected sources and local reasoning when they contribute to its requested local result.
-Context-heavy source inspection, history or transcript searches, inventories, narrow read-only probes, and factual checks are normal delegation cases when a report keeps underlying detail out of the parent context.
-A handful of short files, evidence returned compactly by one targeted command, tightly coupled reasoning, and raw evidence the parent must understand directly remain in the parent.
-The parent owns and performs outcome framing, work decomposition, consequential interpretation, cross-cutting decisions, planning, design, implementation, synthesis, final verification, and user communication.
-It does not partition the complete user task among helpers or use helpers to produce plans, designs, implementations, recommendations, review verdicts, final verification, or answers.
-The parent does not duplicate an active evidence operation.
-It dispatches helpers in a standalone tool call and stops its run until the completion follow-up arrives.
-It then uses each report as evidence while performing the parent-owned work.
-It does not reconstruct the helper's source inspection.
-When required evidence is missing or unclear, it sends one context-local follow-up to the same helper.
-Each assignment selects the least intensive suitable identity and contains one requested local evidence result, relevant starting anchors and constraints, and a stopping condition when one is useful.
-The report identifies inspected sources, direct observations, supported inferences, and material unknowns needed to evaluate its result.
+Each owned agent opens in a new tab in the parent session's current Herdr workspace and uses the parent's working directory.
+The assignment user message defines the agent's task-specific behavior and output.
+Every child receives a mandatory read-only boundary after any identity-specific instructions.
+If an assignment requires a state change, the child reports that limitation and stops.
+The extension does not create Git worktrees or provide operating-system isolation.
 
-Each `start_agents` call dispatches one fixed batch of assignments.
-A batch contains one or more supporting assignments and produces one grouped completion notification after every assignment settles.
-A batch groups independent evidence operations started together and does not partition or transfer the user's task.
-Use multiple helpers only for non-overlapping evidence operations or intentional independent corroboration.
-Call `start_agents` as the only tool call in its assistant turn.
-After dispatch, the tool terminates the parent run so the completion notification can resume it after the batch settles.
-Do not combine dispatch with parent evidence-gathering calls.
-Do not poll status or resend an assignment because a normal temporary helper tab closed.
-A normal helper closes its tab after preserving its report and resumable session.
-Every child receives a mandatory read-only boundary after any profile-specific instructions.
-If its task requires a state change, it reports that limitation and stops.
-The assignment user message defines the task-specific behavior and output.
-Set `keep_open: true` when starting an agent to keep it as a persistent collaborator.
+Each `start_agents` call dispatches one fixed batch containing one or more assignments.
+The call returns after every agent either accepts its assignment or fails to start.
+It does not terminate the parent turn.
+Set `keep_open: true` when an agent should remain available after completion.
+A normal temporary agent closes its tab after preserving its report and resumable session.
 
-`send_agents` steers active assignments without creating a new batch.
-If the previous assignments have settled, the messages start the next assignments as one new fixed batch.
+`send_agents` guides active assignments without creating a new batch.
+Messages to settled agents start their next assignments as one new fixed batch.
 Do not mix active guidance and new assignments in one call.
-A one-agent call is valid.
-Call `send_agents` as the only tool call in its assistant turn.
-It terminates the parent run after guidance or a new assignment is accepted.
-`interrupt_agent` sends Pi's Escape interrupt key, then waits for settlement with a bounded timeout.
-If Herdr still reports the child as working or unknown, the extension preserves the tab and session, retains the assignment lock, and continues reconciliation in the background.
 Sending a message to a closed agent resumes its Pi session in a new tab.
 The extension reloads `config.json` and the selected identity file before it starts or resumes a child, so edits apply without reloading the parent Pi session.
 
+`interrupt_agent` sends Pi's Escape key, then waits for settlement with a bounded timeout.
+If Herdr still reports the child as working or unknown, the extension preserves the tab and session, retains the assignment lock, and continues reconciliation in the background.
+
 Batch completion sends one hidden follow-up message to the parent and triggers a parent turn.
-The message tells the parent to evaluate the supporting reports before using them.
 The grouped message contains the latest assistant text from every assignment in that batch, subject to Pi's output limits.
 If text is truncated, the full child conversation remains in the recorded child session file but is not automatically loaded into the parent model context.
 If the parent is active when the batch settles, the extension defers the follow-up until that parent turn settles.
@@ -238,8 +216,7 @@ Successful, failed, blocked, and interrupted results all settle their batch memb
 Pending batches survive a Pi extension reload.
 
 In TUI mode, a concise widget above the editor shows active or blocked assignment names and selected identities.
-Use `list_agents` when you need identity, assignment, tab lifecycle, or resumability details.
-A successfully completed temporary assignment is shown as settled even when its tab has closed; its report arrives through the batch completion notification.
+Use `list_agents` to inspect identity, assignment, tab lifecycle, and resumability details.
 
 Only the same parent Pi session can list or resume its owned agents.
 Forked and unrelated Pi sessions do not adopt them.
