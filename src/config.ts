@@ -125,8 +125,19 @@ export async function loadConfig(configDir = getConfigDirectory()): Promise<Exte
     }
   }
 
-  const unknown = Object.keys(raw).filter((key) => key !== "maxAgents" && key !== "defaults");
+  const unknown = Object.keys(raw).filter((key) => key !== "maxAgents" && key !== "defaults" && key !== "instructionsFile");
   if (unknown.length > 0) throw new Error(`Invalid ${configPath}: unknown fields: ${unknown.join(", ")}`);
+
+  let instructions: string | undefined;
+  const instructionsFile = readString(raw.instructionsFile, "instructionsFile");
+  if (instructionsFile) {
+    const instructionsPath = resolveResource(instructionsFile, configDir);
+    try {
+      instructions = (await readFile(instructionsPath, "utf8")).trim() || undefined;
+    } catch (error) {
+      throw new Error(`Invalid ${configPath}: could not read instructionsFile ${instructionsPath}: ${(error as Error).message}`);
+    }
+  }
 
   const maxAgents = raw.maxAgents ?? DEFAULT_MAX_AGENTS;
   if (!Number.isInteger(maxAgents) || (maxAgents as number) < 1) {
@@ -159,6 +170,7 @@ export async function loadConfig(configDir = getConfigDirectory()): Promise<Exte
   return {
     maxAgents: maxAgents as number,
     defaults: readRuntimeSettings(raw.defaults, "defaults", configDir),
+    instructions,
     identities,
     warnings,
   };

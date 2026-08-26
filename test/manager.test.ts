@@ -274,10 +274,10 @@ test("a start reloads the identity before spawning the child", async () => {
   const modelIndex = fake.startArgs.indexOf("--model");
   assert.equal(fake.startArgs[modelIndex + 1], "updated-model");
   const instructionsIndex = fake.startArgs.indexOf("--append-system-prompt");
-  assert.equal(await readFile(fake.startArgs[instructionsIndex + 1], "utf8"), composeChildSystemPrompt("Use the updated profile."));
+  assert.equal(await readFile(fake.startArgs[instructionsIndex + 1], "utf8"), composeChildSystemPrompt({ identityInstructions: "Use the updated profile." }));
 });
 
-test("a frontmatter-only identity receives the common child prompt", async () => {
+test("a frontmatter-only identity receives no appended child prompt", async () => {
   const fake = new FakeHerdr();
   fake.sessionFile = await childSessionFile();
   const config = testConfig();
@@ -294,10 +294,32 @@ test("a frontmatter-only identity receives the common child prompt", async () =>
 
   await manager.start({ name: "fast", identityName: "reviewer", task: "Check it.", keepOpen: true, cwd: "/repo" });
 
-  const instructionsIndex = fake.startArgs.indexOf("--append-system-prompt");
-  assert.notEqual(instructionsIndex, -1);
-  assert.equal(await readFile(fake.startArgs[instructionsIndex + 1], "utf8"), composeChildSystemPrompt());
+  assert.equal(fake.startArgs.includes("--append-system-prompt"), false);
   assert.equal(fake.prompts[0], "Check it.");
+});
+
+test("shared instructions precede identity instructions in the child prompt", async () => {
+  const fake = new FakeHerdr();
+  fake.sessionFile = await childSessionFile();
+  const config = testConfig();
+  config.instructions = "Follow shared instructions.";
+  const manager = new AgentManager(
+    fake as unknown as HerdrClient,
+    config,
+    "w1",
+    dirname(fake.sessionFile),
+    "parent",
+    { provider: "test", model: "test/model", thinking: "medium" },
+    { persist() {}, notify() {} },
+  );
+
+  await manager.start({ name: "trial", identityName: "reviewer", task: "Run it.", keepOpen: true, cwd: "/repo" });
+
+  const instructionsIndex = fake.startArgs.indexOf("--append-system-prompt");
+  assert.equal(
+    await readFile(fake.startArgs[instructionsIndex + 1], "utf8"),
+    "Follow shared instructions.\n\nReview the assignment.\n",
+  );
 });
 
 test("re-reports display metadata when restoring a live child", async () => {

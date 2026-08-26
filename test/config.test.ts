@@ -51,6 +51,22 @@ skills:
   assert.deepEqual(config.identities[0].skills, ["!session-transfer", `-${join(root, "agents", "skills", "local")}`]);
 });
 
+test("loads shared instructions from a configured relative file", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-herdr-config-"));
+  await writeFile(join(root, "config.json"), JSON.stringify({ instructionsFile: "./instructions.md" }));
+  await writeFile(join(root, "instructions.md"), "Shared child instructions.\n");
+
+  const config = await loadConfig(root);
+  assert.equal(config.instructions, "Shared child instructions.");
+});
+
+test("rejects an unreadable configured instructions file", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-herdr-config-"));
+  await writeFile(join(root, "config.json"), JSON.stringify({ instructionsFile: "./missing.md" }));
+
+  await assert.rejects(loadConfig(root), /could not read instructionsFile/);
+});
+
 test("invalid global defaults disable the complete configuration", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-herdr-config-"));
   await writeFile(join(root, "config.json"), JSON.stringify({ defaults: { tools: "read" } }));

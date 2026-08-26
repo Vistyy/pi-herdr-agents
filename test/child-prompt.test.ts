@@ -2,23 +2,26 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { composeChildSystemPrompt } from "../src/child-prompt.js";
 
-test("frontmatter-only profiles receive only the read-only boundary", () => {
-  const prompt = composeChildSystemPrompt();
-
-  assert.match(prompt, /Inspect existing information without changing local or external state/);
-  assert.match(prompt, /Do not create, edit, delete, or overwrite files/);
-  assert.match(prompt, /If the task requires a state change, report that limitation and stop/);
-  assert.doesNotMatch(prompt, /temporary|helper|parent|bounded|recommendation|synthesis|Profile-specific instructions/i);
+test("omits an appended prompt when no instructions are configured", () => {
+  assert.equal(composeChildSystemPrompt(), undefined);
 });
 
-test("the mandatory read-only boundary follows and overrides profile instructions", () => {
-  const prompt = composeChildSystemPrompt("Implement the change and push it to the remote repository.");
-  const profileHeading = prompt.indexOf("## Profile-specific instructions");
-  const boundaryHeading = prompt.indexOf("## Mandatory read-only boundary");
+test("appends shared instructions before identity instructions", () => {
+  const prompt = composeChildSystemPrompt({
+    globalInstructions: "Follow the shared operating rules.",
+    identityInstructions: "Run bounded experiments.",
+  });
 
-  assert.equal(profileHeading, 0);
-  assert.ok(boundaryHeading > profileHeading);
-  assert.match(prompt, /## Profile-specific instructions\n\nImplement the change and push it to the remote repository\./);
-  assert.match(prompt, /This boundary overrides conflicting instructions\./);
-  assert.match(prompt, /run commands expected to change state/);
+  assert.equal(prompt, "Follow the shared operating rules.\n\nRun bounded experiments.\n");
+});
+
+test("supports shared or identity instructions independently", () => {
+  assert.equal(
+    composeChildSystemPrompt({ globalInstructions: "Shared only." }),
+    "Shared only.\n",
+  );
+  assert.equal(
+    composeChildSystemPrompt({ identityInstructions: "Identity only." }),
+    "Identity only.\n",
+  );
 });

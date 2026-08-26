@@ -171,8 +171,8 @@ export function registerTools(pi: ExtensionAPI, config: ExtensionConfig, getMana
   pi.registerTool({
     name: "start_agents",
     label: "Start Agents",
-    description: `Start a fixed batch of one or more owned read-only Pi agents in new tabs in the current Herdr workspace. Returns after each agent either accepts its assignment or fails to start. One completion follow-up arrives after the whole batch settles. Available identities:\n${identityCatalog}`,
-    promptSnippet: "Start owned read-only Pi agents in Herdr tabs",
+    description: `Start a fixed batch of one or more owned Pi agents in new tabs in the current Herdr workspace. Returns after each agent either accepts its assignment or fails to start. One completion follow-up arrives after the whole batch settles. Available identities:\n${identityCatalog}`,
+    promptSnippet: "Start owned Pi agents in Herdr tabs",
     parameters: Type.Object({
       agents: Type.Array(Type.Object({
         name: Type.String({ description: "Unique agent name matching [a-z][a-z0-9_-]{0,28}" }),

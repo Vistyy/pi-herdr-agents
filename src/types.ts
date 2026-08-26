@@ -23,6 +23,7 @@ export interface AgentIdentity extends RuntimeSettings {
 export interface ExtensionConfig {
   maxAgents: number;
   defaults: RuntimeSettings;
+  instructions?: string;
   identities: AgentIdentity[];
   warnings: string[];
 }

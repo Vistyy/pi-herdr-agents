@@ -570,11 +570,16 @@ export class AgentManager {
     }
   }
 
-  private async writeInstructions(identity: AgentIdentity): Promise<string> {
+  private async writeInstructions(identity: AgentIdentity): Promise<string | undefined> {
+    const prompt = composeChildSystemPrompt({
+      globalInstructions: this.config.instructions,
+      identityInstructions: identity.instructions,
+    });
+    if (!prompt) return undefined;
     const promptDir = join(this.sessionDir, "prompts");
     await mkdir(promptDir, { recursive: true });
     const path = join(promptDir, `${identity.name}.md`);
-    await writeFile(path, composeChildSystemPrompt(identity.instructions), { encoding: "utf8", mode: 0o600 });
+    await writeFile(path, prompt, { encoding: "utf8", mode: 0o600 });
     return path;
   }
 
