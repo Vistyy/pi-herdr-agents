@@ -11,25 +11,13 @@ const INTERRUPT_SETTLE_TIMEOUT_MS = 5_000;
 
 interface TurnState {
   assignment: number;
-  claims: Set<string>;
   generation: number;
   controller: AbortController;
-  promise: Promise<OwnedAgentRecord>;
-  resolve: (record: OwnedAgentRecord) => void;
-}
-
-export interface WaitProgress {
-  selected: string[];
-  completed: string[];
-  waiting: string[];
 }
 
 export interface ManagerCallbacks {
   persist(records: OwnedAgentRecord[], collections: OwnedAgentCollection[]): void;
-  notify(record: OwnedAgentRecord): void;
   notifyCollection?(collection: OwnedAgentCollection): void;
-  claimNotification?(record: OwnedAgentRecord): void;
-  releaseNotification?(record: OwnedAgentRecord): void;
   reloadConfig?(): Promise<ExtensionConfig>;
   resolveRuntime?(identity: AgentIdentity, cwd: string, defaults: RuntimeSettings): Promise<RuntimeSettings>;
   warn?(message: string): void;
@@ -319,59 +307,9 @@ export class AgentManager {
       notified: false,
     };
     this.collections.set(collection.id, collection);
-    for (const record of records) {
-      this.callbacks.claimNotification?.(cloneRecord(record));
-      this.turns.get(record.name)?.claims.add(collectionClaim(collection.id));
-    }
     this.persist();
     this.completeCollections();
     return cloneCollection(collection);
-  }
-
-  async wait(
-    names?: string[],
-    signal?: AbortSignal,
-    onProgress?: (progress: WaitProgress) => void,
-  ): Promise<OwnedAgentRecord[]> {
-    const selected = names?.length ? names.map((name) => this.requireRecord(name)) : [...this.records.values()].filter((record) => record.status === "working");
-    const selections = selected.map((record) => ({ record, turn: this.turns.get(record.name) }));
-    for (const { record, turn } of selections) {
-      if (this.sends.has(record.name) && !turn) {
-        throw new Error(`Owned agent ${record.name} is receiving a new assignment.`);
-      }
-    }
-    const completed = new Set(selections.filter(({ turn }) => !turn).map(({ record }) => record.name));
-    const reportProgress = () => onProgress?.({
-      selected: selections.map(({ record }) => record.name),
-      completed: selections.map(({ record }) => record.name).filter((name) => completed.has(name)),
-      waiting: selections.map(({ record }) => record.name).filter((name) => !completed.has(name)),
-    });
-    const claim = `wait:${randomUUID()}`;
-    for (const selection of selections) {
-      this.callbacks.claimNotification?.(cloneRecord(selection.record));
-      if (selection.turn) selection.turn.claims.add(claim);
-    }
-    reportProgress();
-
-    try {
-      return await Promise.all(selections.map(async ({ record, turn }) => {
-        const result = cloneRecord(turn ? await waitWithSignal(turn.promise, signal) : record);
-        completed.add(record.name);
-        reportProgress();
-        return result;
-      }));
-    } catch (error) {
-      for (const { record, turn } of selections) {
-        if (!turn) {
-          if (!this.isCollected(record.name, record.assignment)) this.callbacks.releaseNotification?.(cloneRecord(record));
-        } else if (this.turns.get(record.name) === turn) {
-          turn.claims.delete(claim);
-        } else if (record.completedAssignment === turn.assignment && record.notifiedAssignment !== turn.assignment && !this.isCollected(record.name, turn.assignment)) {
-          this.persistAndNotify(record, false);
-        }
-      }
-      throw error;
-    }
   }
 
   async interrupt(name: string, signal?: AbortSignal): Promise<OwnedAgentRecord> {
@@ -407,12 +345,10 @@ export class AgentManager {
         record.lastResult = `Assignment ${assignment} was interrupted.`;
         record.lastError = undefined;
         record.completedAssignment = assignment;
-        record.notifiedAssignment = assignment;
         record.updatedAt = Date.now();
         this.captureCollectionResults(record);
         this.persist();
         this.completeCollections();
-        turn?.resolve(cloneRecord(record));
         return cloneRecord(record);
       } catch (error) {
         const currentStatus = await this.herdr.getAgent(paneId).then(
@@ -611,15 +547,10 @@ export class AgentManager {
       turn.controller.abort();
       turn.controller = controller;
     } else {
-      let resolve!: (record: OwnedAgentRecord) => void;
-      const promise = new Promise<OwnedAgentRecord>((done) => { resolve = done; });
       turn = {
         assignment: record.assignment,
-        claims: new Set(this.collectionClaims(record.name, record.assignment)),
         generation: 0,
         controller,
-        promise,
-        resolve,
       };
     }
     const generation = ++turn.generation;
@@ -684,14 +615,13 @@ export class AgentManager {
     if (this.turns.get(record.name) !== turn) return;
     this.turns.delete(record.name);
     this.captureCollectionResults(record);
-    this.persistAndNotify(record, turn.claims.size > 0);
+    this.persist();
     this.completeCollections();
-    turn.resolve(cloneRecord(record));
   }
 
   private finishSettledRecord(record: OwnedAgentRecord): void {
     this.captureCollectionResults(record);
-    this.persistAndNotify(record, this.isCollected(record.name, record.assignment));
+    this.persist();
     this.completeCollections();
   }
 
@@ -715,31 +645,9 @@ export class AgentManager {
     }
   }
 
-  private isCollected(name: string, assignment: number): boolean {
-    return [...this.collections.values()].some((collection) =>
-      collection.members.some((member) => member.name === name && member.assignment === assignment));
-  }
-
   private isPendingCollection(name: string, assignment: number): boolean {
     return [...this.collections.values()].some((collection) => !collection.notified
       && collection.members.some((member) => member.name === name && member.assignment === assignment));
-  }
-
-  private collectionClaims(name: string, assignment: number): string[] {
-    return [...this.collections.values()]
-      .filter((collection) => !collection.notified
-        && collection.members.some((member) => member.name === name && member.assignment === assignment))
-      .map((collection) => collectionClaim(collection.id));
-  }
-
-  private persistAndNotify(record: OwnedAgentRecord, claimed: boolean): void {
-    if (!claimed && record.notifiedAssignment !== record.assignment) {
-      record.notifiedAssignment = record.assignment;
-      this.persist();
-      this.callbacks.notify(cloneRecord(record));
-      return;
-    }
-    this.persist();
   }
 
   private async closeRecord(record: OwnedAgentRecord, status: "closed" | "interrupted" | "failed"): Promise<void> {
@@ -787,13 +695,11 @@ export class AgentManager {
   private settleClosedTurn(record: OwnedAgentRecord, turn: TurnState | undefined): void {
     if (turn) {
       record.completedAssignment = turn.assignment;
-      record.notifiedAssignment = turn.assignment;
       record.lastResult ??= `Assignment ${turn.assignment} was ${record.status}.`;
       this.captureCollectionResults(record);
     }
     this.persist();
     this.completeCollections();
-    turn?.resolve(cloneRecord(record));
   }
 
   private liveCount(): number {
@@ -867,27 +773,4 @@ function cloneCollection(collection: OwnedAgentCollection): OwnedAgentCollection
       result: member.result ? cloneRecord(member.result) : undefined,
     })),
   };
-}
-
-function collectionClaim(id: string): string {
-  return `collection:${id}`;
-}
-
-async function waitWithSignal<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
-  if (!signal) return promise;
-  if (signal.aborted) throw new Error("Wait cancelled.");
-  return new Promise<T>((resolve, reject) => {
-    const abort = () => reject(new Error("Wait cancelled."));
-    signal.addEventListener("abort", abort, { once: true });
-    promise.then(
-      (value) => {
-        signal.removeEventListener("abort", abort);
-        resolve(value);
-      },
-      (error) => {
-        signal.removeEventListener("abort", abort);
-        reject(error);
-      },
-    );
-  });
 }

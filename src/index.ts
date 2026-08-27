@@ -13,7 +13,7 @@ import { getConfigDirectory, loadConfig } from "./config.js";
 import { OwnedAgentViewController } from "./agent-view.js";
 import { HerdrClient } from "./herdr.js";
 import { AgentManager } from "./manager.js";
-import { DeferredNotifications } from "./notifications.js";
+import { sendBatchCompletion } from "./notifications.js";
 import { discoverInheritedResources, resolveRuntimeSettings } from "./resources.js";
 import {
   OWNED_AGENT_ENTRY,
@@ -22,10 +22,6 @@ import {
   type OwnedAgentRecord,
   type OwnedAgentSnapshot,
 } from "./types.js";
-
-type ParentNotification =
-  | { kind: "agent"; record: OwnedAgentRecord }
-  | { kind: "collection"; collection: OwnedAgentCollection };
 
 export default async function piHerdrAgents(pi: ExtensionAPI): Promise<void> {
   if (process.env.HERDR_ENV !== "1" || !process.env.HERDR_WORKSPACE_ID) {
@@ -50,7 +46,7 @@ export default async function piHerdrAgents(pi: ExtensionAPI): Promise<void> {
   const agentDir = dirname(configDir);
 
   let manager: AgentManager | undefined;
-  let notifications: DeferredNotifications<ParentNotification> | undefined;
+  let acceptsCompletions = false;
   pi.on("session_start", async (_event, ctx) => {
     for (const warning of config.warnings) ctx.ui.notify(warning, "warning");
     const view = OwnedAgentViewController.fromEnvironment();
@@ -65,22 +61,7 @@ export default async function piHerdrAgents(pi: ExtensionAPI): Promise<void> {
     const parentToken = createHash("sha256").update(parentSessionId).digest("hex").slice(0, 8);
     const herdr = new HerdrClient((command, args, options) => pi.exec(command, args, options));
     const inheritedResources = new Map<string, ReturnType<typeof discoverInheritedResources>>();
-    notifications = new DeferredNotifications<ParentNotification>(
-      () => ctx.isIdle(),
-      (notification) => {
-        pi.sendMessage(
-          {
-            customType: OWNED_AGENT_ENTRY,
-            content: notification.kind === "agent"
-              ? formatNotification(notification.record)
-              : formatCollectionNotification(notification.collection),
-            display: false,
-            details: notification,
-          },
-          { deliverAs: "followUp", triggerTurn: true },
-        );
-      },
-    );
+    acceptsCompletions = true;
     manager = new AgentManager(
       herdr,
       config,
@@ -98,17 +79,8 @@ export default async function piHerdrAgents(pi: ExtensionAPI): Promise<void> {
           pi.appendEntry(OWNED_AGENT_ENTRY, snapshot);
           updateAgentWidget(ctx, records);
         },
-        notify(record) {
-          notifications?.complete(notificationKey(record), { kind: "agent", record });
-        },
         notifyCollection(collection) {
-          notifications?.complete(`collection:${collection.id}`, { kind: "collection", collection });
-        },
-        claimNotification(record) {
-          notifications?.claim(notificationKey(record));
-        },
-        releaseNotification(record) {
-          notifications?.complete(notificationKey(record), { kind: "agent", record });
+          if (acceptsCompletions) sendBatchCompletion(pi, collection);
         },
         reloadConfig: () => loadConfig(configDir),
         warn(message) {
@@ -143,12 +115,8 @@ export default async function piHerdrAgents(pi: ExtensionAPI): Promise<void> {
     await manager.restore(snapshot.records, snapshot.collections);
   });
 
-  pi.on("agent_settled", () => notifications?.flush());
-
   pi.on("session_shutdown", async (event, ctx) => {
-    if (event.reason === "reload") notifications?.flush();
-    notifications?.clear();
-    notifications = undefined;
+    acceptsCompletions = false;
     if (manager) {
       if (event.reason === "reload") manager.suspend();
       else await manager.shutdown();
@@ -171,7 +139,7 @@ export function registerTools(pi: ExtensionAPI, config: ExtensionConfig, getMana
   pi.registerTool({
     name: "start_agents",
     label: "Start Agents",
-    description: `Start a fixed batch of one or more owned Pi agents in new tabs in the current Herdr workspace. Returns after each agent either accepts its assignment or fails to start. One completion follow-up arrives after the whole batch settles. Available identities:\n${identityCatalog}`,
+    description: `Start a fixed batch of one or more owned Pi agents in new tabs in the current Herdr workspace. Returns after each agent either accepts its assignment or fails to start. One grouped completion report is steered into the parent after the whole batch settles. Available identities:\n${identityCatalog}`,
     promptSnippet: "Start owned Pi agents in Herdr tabs",
     parameters: Type.Object({
       agents: Type.Array(Type.Object({
@@ -196,7 +164,7 @@ export function registerTools(pi: ExtensionAPI, config: ExtensionConfig, getMana
         : failedDispatchRecord(params.agents[index].name, params.agents[index].identity, params.agents[index].task, params.agents[index].keep_open ?? false, ctx.cwd, outcome.reason));
       const batch = manager.batch(records);
       const names = batch.members.map((member) => member.name).join(", ");
-      return batchToolResult(`Started ${batch.id}: ${names}. One completion follow-up will arrive after the batch settles.`, records, batch);
+      return batchToolResult(`Started ${batch.id}: ${names}. One grouped completion report will arrive after the batch settles.`, records, batch);
     },
   });
 
@@ -249,14 +217,14 @@ export function registerTools(pi: ExtensionAPI, config: ExtensionConfig, getMana
 
       const batch = manager.batch(newAssignments);
       const names = batch.members.map((member) => member.name).join(", ");
-      return batchToolResult(`Started ${batch.id}: ${names}. One completion follow-up will arrive after the batch settles.`, newAssignments, batch);
+      return batchToolResult(`Started ${batch.id}: ${names}. One grouped completion report will arrive after the batch settles.`, newAssignments, batch);
     },
   });
 
   pi.registerTool({
     name: "list_agents",
     label: "List Agents",
-    description: "List the assignment and tab lifecycle state of agents owned by the current parent Pi session, including settled agents whose tabs closed and sessions remain resumable. Completion reports arrive through batch notifications.",
+    description: "List the assignment and tab lifecycle state of agents owned by the current parent Pi session, including settled agents whose tabs closed and sessions remain resumable.",
     promptSnippet: "List agents owned by this parent session",
     parameters: Type.Object({}),
     async execute() {
@@ -361,14 +329,6 @@ export function formatList(records: OwnedAgentRecord[]): string {
   }).join("\n");
 }
 
-function formatResults(records: OwnedAgentRecord[]): string {
-  if (records.length === 0) return "No agent results.";
-  return records.map((record) => {
-    const status = record.status === "idle" || record.status === "closed" ? "" : ` (${record.status})`;
-    return `## ${record.name}${status}\n\n${record.lastResult ?? record.lastError ?? "(no result)"}`;
-  }).join("\n\n");
-}
-
 function updateAgentWidget(ctx: ExtensionContext, records: OwnedAgentRecord[]): void {
   if (ctx.mode !== "tui") return;
   const visible = records.filter((record) =>
@@ -405,22 +365,4 @@ function wrapInline(prefix: string, items: string[], width: number): string[] {
   }
   lines.push(line.slice(0, width));
   return lines;
-}
-
-function notificationKey(record: OwnedAgentRecord): string {
-  return `${record.name}:${record.assignment}`;
-}
-
-export function formatNotification(record: OwnedAgentRecord): string {
-  const status = record.status === "idle" || record.status === "closed" ? "" : ` (${record.status})`;
-  return `Owned agent ${record.name} settled${status}.\n\n${record.lastResult ?? record.lastError ?? "(no result)"}`;
-}
-
-export function formatCollectionNotification(collection: OwnedAgentCollection): string {
-  const records = collection.members.flatMap((member) => member.result ? [member.result] : []);
-  const text = `Owned agent batch ${collection.id} settled.\n\n${formatResults(records)}`;
-  const truncated = truncateHead(text, { maxBytes: DEFAULT_MAX_BYTES, maxLines: DEFAULT_MAX_LINES });
-  return truncated.truncated
-    ? `${truncated.content}\n\n[Batch output truncated. Full individual results remain in the child Pi session files.]`
-    : truncated.content;
 }

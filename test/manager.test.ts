@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 import { composeChildSystemPrompt } from "../src/child-prompt.js";
 import type { HerdrClient } from "../src/herdr.js";
-import { AgentManager, type WaitProgress } from "../src/manager.js";
+import { AgentManager } from "../src/manager.js";
 import type { ExtensionConfig, HerdrAgent, OwnedAgentCollection, OwnedAgentRecord } from "../src/types.js";
 
 function deferred<T>() {
@@ -161,10 +161,9 @@ class FakeHerdr {
   }
 }
 
-test("a claimed task result is returned, not automatically announced, and its tab closes", async () => {
+test("a settled temporary assignment retains its result and closes its tab", async () => {
   const fake = new FakeHerdr();
   fake.sessionFile = await childSessionFile();
-  const notifications: OwnedAgentRecord[] = [];
   const snapshots: OwnedAgentRecord[][] = [];
   const manager = new AgentManager(
     fake as unknown as HerdrClient,
@@ -173,17 +172,11 @@ test("a claimed task result is returned, not automatically announced, and its ta
     dirname(fake.sessionFile),
     "parent",
     { provider: "test", model: "test/model", thinking: "medium" },
-    {
-      persist: (records) => snapshots.push(records),
-      notify: (record) => notifications.push(record),
-    },
+    { persist: (records) => snapshots.push(records) },
   );
 
   await manager.start({ name: "review", identityName: "reviewer", task: "Review it.", keepOpen: false, cwd: "/repo" });
   assert.equal(fake.prompts[0], "Review it.");
-  const progress: WaitProgress[] = [];
-  const waiting = manager.wait(["review"], undefined, (update) => progress.push(update));
-  assert.deepEqual(progress, [{ selected: ["review"], completed: [], waiting: ["review"] }]);
   fake.settled.resolve({
     pane_id: "w1:p2",
     tab_id: "w1:t2",
@@ -192,16 +185,13 @@ test("a claimed task result is returned, not automatically announced, and its ta
     agent_session: { value: fake.activeSessionFile },
   });
 
-  const [result] = await waiting;
-  assert.equal(result.lastResult, "Finished review.");
-  assert.deepEqual(progress.at(-1), { selected: ["review"], completed: ["review"], waiting: [] });
-  assert.equal(notifications.length, 0);
   await new Promise((resolve) => setImmediate(resolve));
+  const result = manager.getRecords()[0];
+  assert.equal(result.lastResult, "Finished review.");
   assert.deepEqual(fake.closed, ["w1:t2"]);
-  assert.equal(manager.getRecords()[0].status, "closed");
+  assert.equal(result.status, "closed");
   assert.ok(snapshots.length > 0);
 });
-
 test("a start uses the explicitly selected identity", async () => {
   const fake = new FakeHerdr();
   fake.sessionFile = await childSessionFile();
@@ -217,7 +207,7 @@ test("a start uses the explicitly selected identity", async () => {
     dirname(fake.sessionFile),
     "parent",
     { provider: "test", model: "parent-model", thinking: "medium" },
-    { persist() {}, notify() {} },
+    { persist() {} },
   );
 
   const record = await manager.start({ name: "check", identityName: "reviewer", task: "Check it.", keepOpen: true, cwd: "/repo" });
@@ -237,7 +227,7 @@ test("a start rejects an unknown selected identity", async () => {
     dirname(fake.sessionFile),
     "parent",
     { provider: "test", model: "parent-model", thinking: "medium" },
-    { persist() {}, notify() {} },
+    { persist() {} },
   );
 
   await assert.rejects(
@@ -264,7 +254,6 @@ test("a start reloads the identity before spawning the child", async () => {
     { provider: "test", model: "parent-model", thinking: "medium" },
     {
       persist() {},
-      notify() {},
       async reloadConfig() { return refreshed; },
     },
   );
@@ -289,7 +278,7 @@ test("a frontmatter-only identity receives no appended child prompt", async () =
     dirname(fake.sessionFile),
     "parent",
     { provider: "test", model: "test/model", thinking: "medium" },
-    { persist() {}, notify() {} },
+    { persist() {} },
   );
 
   await manager.start({ name: "fast", identityName: "reviewer", task: "Check it.", keepOpen: true, cwd: "/repo" });
@@ -310,7 +299,7 @@ test("shared instructions precede identity instructions in the child prompt", as
     dirname(fake.sessionFile),
     "parent",
     { provider: "test", model: "test/model", thinking: "medium" },
-    { persist() {}, notify() {} },
+    { persist() {} },
   );
 
   await manager.start({ name: "trial", identityName: "reviewer", task: "Run it.", keepOpen: true, cwd: "/repo" });
@@ -333,7 +322,7 @@ test("re-reports display metadata when restoring a live child", async () => {
     dirname(fake.sessionFile),
     "parent",
     { provider: "test", model: "test/model", thinking: "medium" },
-    { persist() {}, notify() {} },
+    { persist() {} },
   );
 
   await manager.restore([{
@@ -366,7 +355,7 @@ test("keeps a live child when restore metadata refresh fails and retries without
     dirname(fake.sessionFile),
     "parent",
     { provider: "test", model: "test/model", thinking: "medium" },
-    { persist() {}, notify() {}, warn: (message) => warnings.push(message) },
+    { persist() {}, warn: (message) => warnings.push(message) },
   );
 
   await manager.restore([{
@@ -411,7 +400,7 @@ test("re-reports display metadata before reusing a failed child", async () => {
     dirname(fake.sessionFile),
     "parent",
     { provider: "test", model: "test/model", thinking: "medium" },
-    { persist() {}, notify() {} },
+    { persist() {} },
   );
 
   await assert.rejects(
@@ -439,7 +428,7 @@ test("publishes the caller name as display metadata on start and reopen", async 
     dirname(fake.sessionFile),
     "parent",
     { provider: "test", model: "test/model", thinking: "medium" },
-    { persist() {}, notify() {} },
+    { persist() {} },
   );
 
   await manager.start({ name: "review", identityName: "reviewer", task: "Review it.", keepOpen: true, cwd: "/repo" });
@@ -453,10 +442,9 @@ test("publishes the caller name as display metadata on start and reopen", async 
   assert.equal(fake.agentName, "oa-parent-review-c97a");
 });
 
-test("a wait claims a completion deferred during the current parent turn", async () => {
+test("send steers active work without replacing its assignment or close behavior", async () => {
   const fake = new FakeHerdr();
   fake.sessionFile = await childSessionFile();
-  const pending = new Map<string, OwnedAgentRecord>();
   const manager = new AgentManager(
     fake as unknown as HerdrClient,
     testConfig(),
@@ -464,109 +452,11 @@ test("a wait claims a completion deferred during the current parent turn", async
     dirname(fake.sessionFile),
     "parent",
     { provider: "test", model: "test/model", thinking: "medium" },
-    {
-      persist() {},
-      notify: (record) => pending.set(`${record.name}:${record.assignment}`, record),
-      claimNotification: (record) => pending.delete(`${record.name}:${record.assignment}`),
-    },
-  );
-
-  await manager.start({ name: "review", identityName: "reviewer", task: "Review it.", keepOpen: true, cwd: "/repo" });
-  fake.settled.resolve({
-    pane_id: "w1:p2",
-    tab_id: "w1:t2",
-    workspace_id: "w1",
-    agent_status: "done",
-    agent_session: { value: fake.activeSessionFile },
-  });
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(pending.size, 1);
-
-  const [result] = await manager.wait(["review"]);
-
-  assert.equal(result.lastResult, "Finished review.");
-  assert.equal(pending.size, 0);
-});
-
-test("a cancelled wait restores automatic notification for later completion", async () => {
-  const fake = new FakeHerdr();
-  fake.sessionFile = await childSessionFile();
-  const notifications: OwnedAgentRecord[] = [];
-  const manager = new AgentManager(
-    fake as unknown as HerdrClient,
-    testConfig(),
-    "w1",
-    dirname(fake.sessionFile),
-    "parent",
-    { provider: "test", model: "test/model", thinking: "medium" },
-    { persist() {}, notify: (record) => notifications.push(record) },
-  );
-
-  await manager.start({ name: "review", identityName: "reviewer", task: "Review it.", keepOpen: true, cwd: "/repo" });
-  const controller = new AbortController();
-  const waiting = manager.wait(["review"], controller.signal);
-  controller.abort();
-  await assert.rejects(waiting, /Wait cancelled/);
-
-  fake.settled.resolve({
-    pane_id: "w1:p2",
-    tab_id: "w1:t2",
-    workspace_id: "w1",
-    agent_status: "done",
-    agent_session: { value: fake.activeSessionFile },
-  });
-  await new Promise((resolve) => setImmediate(resolve));
-
-  assert.equal(notifications.length, 1);
-  assert.equal(notifications[0].lastResult, "Finished review.");
-});
-
-test("an unclaimed persistent result notifies the parent and keeps its tab", async () => {
-  const fake = new FakeHerdr();
-  fake.sessionFile = await childSessionFile();
-  const notifications: OwnedAgentRecord[] = [];
-  const manager = new AgentManager(
-    fake as unknown as HerdrClient,
-    testConfig(),
-    "w1",
-    dirname(fake.sessionFile),
-    "parent",
-    { provider: "test", model: "test/model", thinking: "medium" },
-    { persist() {}, notify: (record) => notifications.push(record) },
-  );
-
-  await manager.start({ name: "review", identityName: "reviewer", task: "Review it.", keepOpen: true, cwd: "/repo" });
-  fake.settled.resolve({
-    pane_id: "w1:p2",
-    tab_id: "w1:t2",
-    workspace_id: "w1",
-    agent_status: "done",
-    agent_session: { value: fake.activeSessionFile },
-  });
-  await new Promise((resolve) => setImmediate(resolve));
-
-  assert.equal(notifications[0].lastResult, "Finished review.");
-  assert.equal(manager.getRecords()[0].status, "idle");
-  assert.deepEqual(fake.closed, []);
-});
-
-test("send steers active work without replacing its assignment, claims, or close behavior", async () => {
-  const fake = new FakeHerdr();
-  fake.sessionFile = await childSessionFile();
-  const notifications: OwnedAgentRecord[] = [];
-  const manager = new AgentManager(
-    fake as unknown as HerdrClient,
-    testConfig(),
-    "w1",
-    dirname(fake.sessionFile),
-    "parent",
-    { provider: "test", model: "test/model", thinking: "medium" },
-    { persist() {}, notify: (record) => notifications.push(record) },
+    { persist() {} },
   );
 
   await manager.start({ name: "review", identityName: "reviewer", task: "Review.", keepOpen: false, cwd: "/repo" });
   fake.promptReportedStatus = "working";
-  const waiting = manager.wait(["review"]);
   const steered = await manager.send("review", "Focus on lifecycle races.");
 
   assert.equal(steered.assignment, 1);
@@ -583,19 +473,17 @@ test("send steers active work without replacing its assignment, claims, or close
     agent_status: "done",
     agent_session: { value: fake.activeSessionFile },
   });
-  const [result] = await waiting;
   await new Promise((resolve) => setImmediate(resolve));
 
+  const result = manager.getRecords()[0];
   assert.equal(result.assignment, 1);
   assert.equal(result.lastResult, "Finished review.");
-  assert.deepEqual(notifications, []);
   assert.deepEqual(fake.closed, ["w1:t2"]);
 });
 
-test("send keeps settlement paused until a racing message has a completion watcher", async () => {
+test("send keeps settlement paused until racing guidance has a completion watcher", async () => {
   const fake = new FakeHerdr();
   fake.sessionFile = await childSessionFile();
-  const notifications: OwnedAgentRecord[] = [];
   const manager = new AgentManager(
     fake as unknown as HerdrClient,
     testConfig(),
@@ -603,7 +491,7 @@ test("send keeps settlement paused until a racing message has a completion watch
     dirname(fake.sessionFile),
     "parent",
     { provider: "test", model: "test/model", thinking: "medium" },
-    { persist() {}, notify: (record) => notifications.push(record) },
+    { persist() {} },
   );
 
   await manager.start({ name: "review", identityName: "reviewer", task: "Review.", keepOpen: true, cwd: "/repo" });
@@ -623,17 +511,16 @@ test("send keeps settlement paused until a racing message has a completion watch
     agent_session: { value: fake.activeSessionFile },
   });
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(notifications.length, 0);
+  assert.equal(manager.getRecords()[0].status, "working");
 
   promptGate.resolve();
   const sent = await sending;
   assert.equal(sent.assignment, 1);
-  assert.equal(notifications.length, 0);
+  assert.equal(manager.getRecords()[0].status, "working");
 
   continuation.resolve();
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(notifications.length, 1);
-  assert.equal(notifications[0].assignment, 1);
+  assert.equal(manager.getRecords()[0].completedAssignment, 1);
 });
 
 test("send fences a watcher whose Herdr wait resolved just before steering", async () => {
@@ -647,7 +534,7 @@ test("send fences a watcher whose Herdr wait resolved just before steering", asy
     dirname(fake.sessionFile),
     "parent",
     { provider: "test", model: "test/model", thinking: "medium" },
-    { persist() {}, notify() {} },
+    { persist() {} },
   );
 
   await manager.start({ name: "review", identityName: "reviewer", task: "Review.", keepOpen: false, cwd: "/repo" });
@@ -677,7 +564,7 @@ test("send serializes messages and excludes interrupt and close while submitting
     dirname(fake.sessionFile),
     "parent",
     { provider: "test", model: "test/model", thinking: "medium" },
-    { persist() {}, notify() {} },
+    { persist() {} },
   );
 
   await manager.start({ name: "review", identityName: "reviewer", task: "Review.", keepOpen: true, cwd: "/repo" });
@@ -705,7 +592,7 @@ test("shutdown prevents an in-flight send from installing a new watcher", async 
     dirname(fake.sessionFile),
     "parent",
     { provider: "test", model: "test/model", thinking: "medium" },
-    { persist() {}, notify() {} },
+    { persist() {} },
   );
 
   await manager.start({ name: "review", identityName: "reviewer", task: "Review.", keepOpen: true, cwd: "/repo" });
@@ -732,7 +619,7 @@ test("shutdown prevents new-assignment failure recovery from installing a watche
     dirname(fake.sessionFile),
     "parent",
     { provider: "test", model: "test/model", thinking: "medium" },
-    { persist() {}, notify() {} },
+    { persist() {} },
   );
 
   await manager.start({ name: "review", identityName: "reviewer", task: "Review.", keepOpen: true, cwd: "/repo" });
@@ -753,10 +640,9 @@ test("shutdown prevents new-assignment failure recovery from installing a watche
   await shuttingDown;
   assert.equal(manager.getRecords()[0].status, "interrupted");
   assert.equal(manager.getRecords()[0].paneId, undefined);
-  assert.deepEqual(await manager.wait(["review"]), manager.getRecords());
 });
 
-test("wait and batch registration reject the gap while a new assignment is being submitted", async () => {
+test("batch registration rejects the gap while a new assignment is being submitted", async () => {
   const fake = new FakeHerdr();
   fake.sessionFile = await childSessionFile();
   const manager = new AgentManager(
@@ -766,7 +652,7 @@ test("wait and batch registration reject the gap while a new assignment is being
     dirname(fake.sessionFile),
     "parent",
     { provider: "test", model: "test/model", thinking: "medium" },
-    { persist() {}, notify() {} },
+    { persist() {} },
   );
 
   await manager.start({ name: "review", identityName: "reviewer", task: "Review.", keepOpen: true, cwd: "/repo" });
@@ -780,7 +666,6 @@ test("wait and batch registration reject the gap while a new assignment is being
   const sending = manager.send("review", "Next assignment.");
   await new Promise((resolve) => setImmediate(resolve));
 
-  await assert.rejects(manager.wait(["review"]), /receiving a new assignment/);
   assert.throws(() => manager.batch(manager.getRecords()), /receiving a new assignment/);
 
   gate.resolve();
@@ -799,7 +684,7 @@ test("batch registration rejects an old assignment while a closed agent is reope
     dirname(fake.sessionFile),
     "parent",
     { provider: "test", model: "test/model", thinking: "medium" },
-    { persist() {}, notify() {} },
+    { persist() {} },
   );
   await manager.restore([{
     name: "review",
@@ -835,7 +720,7 @@ test("automatic close reserves the agent against a racing send", async () => {
     dirname(fake.sessionFile),
     "parent",
     { provider: "test", model: "test/model", thinking: "medium" },
-    { persist() {}, notify() {} },
+    { persist() {} },
   );
 
   await manager.start({ name: "review", identityName: "reviewer", task: "Review.", keepOpen: false, cwd: "/repo" });
@@ -860,7 +745,7 @@ test("explicit close reserves the agent against a racing send", async () => {
     dirname(fake.sessionFile),
     "parent",
     { provider: "test", model: "test/model", thinking: "medium" },
-    { persist() {}, notify() {} },
+    { persist() {} },
   );
 
   await manager.start({ name: "review", identityName: "reviewer", task: "Review.", keepOpen: true, cwd: "/repo" });
@@ -877,7 +762,6 @@ test("explicit close reserves the agent against a racing send", async () => {
 test("new assignment prompt failures remain tracked until their acceptance is reconciled", async () => {
   const fake = new FakeHerdr();
   fake.sessionFile = await childSessionFile();
-  const notifications: OwnedAgentRecord[] = [];
   const manager = new AgentManager(
     fake as unknown as HerdrClient,
     testConfig(),
@@ -885,7 +769,7 @@ test("new assignment prompt failures remain tracked until their acceptance is re
     dirname(fake.sessionFile),
     "parent",
     { provider: "test", model: "test/model", thinking: "medium" },
-    { persist() {}, notify: (record) => notifications.push(record) },
+    { persist() {} },
   );
 
   await manager.start({ name: "review", identityName: "reviewer", task: "Review.", keepOpen: true, cwd: "/repo" });
@@ -905,7 +789,7 @@ test("new assignment prompt failures remain tracked until their acceptance is re
   fake.promptError = undefined;
   firstReconciliation.resolve();
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(notifications.at(-1)?.assignment, 2);
+  assert.equal(manager.getRecords()[0].completedAssignment, 2);
 
   fake.currentStatus = "idle";
   const secondReconciliation = deferred<void>();
@@ -919,7 +803,7 @@ test("new assignment prompt failures remain tracked until their acceptance is re
   fake.promptError = undefined;
   secondReconciliation.resolve();
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(notifications.at(-1)?.assignment, 3);
+  assert.equal(manager.getRecords()[0].completedAssignment, 3);
 });
 
 test("interrupt settles the assignment without closing and permits a follow-up", async () => {
@@ -932,7 +816,7 @@ test("interrupt settles the assignment without closing and permits a follow-up",
     dirname(fake.sessionFile),
     "parent",
     { provider: "test", model: "test/model", thinking: "medium" },
-    { persist() {}, notify() {} },
+    { persist() {} },
   );
 
   await manager.start({ name: "review", identityName: "reviewer", task: "Review.", keepOpen: false, cwd: "/repo" });
@@ -963,7 +847,7 @@ test("a failed interrupt retains the active assignment for steering", async () =
     dirname(fake.sessionFile),
     "parent",
     { provider: "test", model: "test/model", thinking: "medium" },
-    { persist() {}, notify() {} },
+    { persist() {} },
   );
 
   await manager.start({ name: "review", identityName: "reviewer", task: "Review.", keepOpen: true, cwd: "/repo" });
@@ -986,7 +870,7 @@ test("a failed interrupt preserves a blocked agent's usable state", async () => 
     dirname(fake.sessionFile),
     "parent",
     { provider: "test", model: "test/model", thinking: "medium" },
-    { persist() {}, notify() {} },
+    { persist() {} },
   );
   await manager.restore([{
     name: "review",
@@ -999,7 +883,6 @@ test("a failed interrupt preserves a blocked agent's usable state", async () => 
     cwd: "/repo",
     assignment: 1,
     completedAssignment: 1,
-    notifiedAssignment: 1,
     lastTask: "Previous.",
     lastResult: "Agent review is blocked and needs input.",
     updatedAt: Date.now(),
@@ -1025,7 +908,7 @@ test("interrupt reconciliation reserves a blocked agent until it finishes", asyn
     dirname(fake.sessionFile),
     "parent",
     { provider: "test", model: "test/model", thinking: "medium" },
-    { persist() {}, notify() {} },
+    { persist() {} },
   );
   await manager.restore([{
     name: "review",
@@ -1038,7 +921,6 @@ test("interrupt reconciliation reserves a blocked agent until it finishes", asyn
     cwd: "/repo",
     assignment: 1,
     completedAssignment: 1,
-    notifiedAssignment: 1,
     lastTask: "Previous.",
     updatedAt: Date.now(),
   }]);
@@ -1066,7 +948,7 @@ test("failed interrupt reconciliation follows the current child state", async ()
     dirname(fake.sessionFile),
     "parent",
     { provider: "test", model: "test/model", thinking: "medium" },
-    { persist() {}, notify() {} },
+    { persist() {} },
   );
   await manager.restore([{
     name: "review",
@@ -1079,7 +961,6 @@ test("failed interrupt reconciliation follows the current child state", async ()
     cwd: "/repo",
     assignment: 1,
     completedAssignment: 1,
-    notifiedAssignment: 1,
     lastTask: "Previous.",
     updatedAt: Date.now(),
   }]);
@@ -1102,7 +983,7 @@ test("parallel reopens reserve names and capacity before tab creation", async ()
     dirname(fake.sessionFile),
     "parent",
     { provider: "test", model: "test/model", thinking: "medium" },
-    { persist() {}, notify() {} },
+    { persist() {} },
   );
   const base = {
     identity: "reviewer",
@@ -1143,7 +1024,7 @@ test("close refuses a pane that no longer hosts the recorded owned agent", async
     dirname(fake.sessionFile),
     "parent",
     { provider: "test", model: "test/model", thinking: "medium" },
-    { persist() {}, notify() {} },
+    { persist() {} },
   );
   await manager.start({ name: "review", identityName: "reviewer", task: "Review.", keepOpen: true, cwd: "/repo" });
   fake.agentName = "unrelated-agent";
@@ -1164,7 +1045,7 @@ test("parallel starts reserve names and capacity before asynchronous tab creatio
     dirname(fake.sessionFile),
     "parent",
     { provider: "test", model: "test/model", thinking: "medium" },
-    { persist() {}, notify() {} },
+    { persist() {} },
   );
 
   const first = manager.start({ name: "first", identityName: "reviewer", task: "First.", keepOpen: true, cwd: "/repo" });
@@ -1235,9 +1116,7 @@ function collectionManager(
   fake: MultiAgentHerdr,
   callbacks: {
     persist?(records: OwnedAgentRecord[], collections: OwnedAgentCollection[]): void;
-    notify?(record: OwnedAgentRecord): void;
     notifyCollection?(collection: OwnedAgentCollection): void;
-    claimNotification?(record: OwnedAgentRecord): void;
   } = {},
 ): AgentManager {
   return new AgentManager(
@@ -1249,19 +1128,15 @@ function collectionManager(
     { provider: "test", model: "test/model", thinking: "medium" },
     {
       persist: callbacks.persist ?? (() => undefined),
-      notify: callbacks.notify ?? (() => undefined),
       notifyCollection: callbacks.notifyCollection,
-      claimNotification: callbacks.claimNotification,
     },
   );
 }
 
-test("a batch includes already-settled mixed outcomes and claims individual notifications", async () => {
+test("a batch includes already-settled mixed outcomes in one notification", async () => {
   const fake = new MultiAgentHerdr();
-  const claimed: string[] = [];
   const completed: OwnedAgentCollection[] = [];
   const manager = collectionManager(fake, {
-    claimNotification: (record) => claimed.push(record.name),
     notifyCollection: (collection) => completed.push(collection),
   });
   const records = [
@@ -1275,21 +1150,18 @@ test("a batch includes already-settled mixed outcomes and claims individual noti
   const collection = manager.batch(records);
 
   assert.equal(collection.notified, true);
-  assert.deepEqual(claimed, ["ok", "blocked", "failed", "stopped"]);
   assert.equal(completed.length, 1);
   assert.deepEqual(completed[0].members.map((member) => member.result?.status), ["idle", "blocked", "failed", "interrupted"]);
 });
 
-test("a batch emits one notification for simultaneous completions and suppresses individuals", async () => {
+test("a batch emits one notification after every member completes", async () => {
   const fake = new MultiAgentHerdr();
   const firstFile = await childSessionFile();
   const secondFile = await childSessionFile();
   fake.add("p1");
   fake.add("p2");
-  const individual: OwnedAgentRecord[] = [];
   const completed: OwnedAgentCollection[] = [];
   const manager = collectionManager(fake, {
-    notify: (record) => individual.push(record),
     notifyCollection: (collection) => completed.push(collection),
   });
   await manager.restore([
@@ -1302,33 +1174,8 @@ test("a batch emits one notification for simultaneous completions and suppresses
   fake.settle("p2");
   await new Promise((resolve) => setImmediate(resolve));
 
-  assert.equal(individual.length, 0);
   assert.equal(completed.length, 1);
   assert.deepEqual(completed[0].members.map((member) => member.result?.lastResult), ["Finished review.", "Finished review."]);
-});
-
-test("a cancelled overlapping wait does not release an assignment from its collection", async () => {
-  const fake = new MultiAgentHerdr();
-  const sessionFile = await childSessionFile();
-  fake.add("p1");
-  const completed: OwnedAgentCollection[] = [];
-  const individual: OwnedAgentRecord[] = [];
-  const manager = collectionManager(fake, {
-    notify: (record) => individual.push(record),
-    notifyCollection: (collection) => completed.push(collection),
-  });
-  await manager.restore([ownedRecord({ name: "review", status: "working", paneId: "p1", sessionFile })]);
-  manager.batch(manager.getRecords());
-  const controller = new AbortController();
-  const waiting = manager.wait(["review"], controller.signal);
-
-  fake.settle("p1");
-  controller.abort();
-  await assert.rejects(waiting, /Wait cancelled/);
-  await new Promise((resolve) => setImmediate(resolve));
-
-  assert.equal(individual.length, 0);
-  assert.equal(completed.length, 1);
 });
 
 test("a transient restore inspection failure does not complete a pending collection", async () => {
@@ -1379,16 +1226,13 @@ test("a pending collection survives manager reload and notifies after settlement
   const secondFake = new MultiAgentHerdr();
   secondFake.add("p1");
   const completed: OwnedAgentCollection[] = [];
-  const individual: OwnedAgentRecord[] = [];
   const secondManager = collectionManager(secondFake, {
-    notify: (record) => individual.push(record),
     notifyCollection: (collection) => completed.push(collection),
   });
   await secondManager.restore(recordsSnapshot, collectionsSnapshot);
   secondFake.settle("p1");
   await new Promise((resolve) => setImmediate(resolve));
 
-  assert.equal(individual.length, 0);
   assert.equal(completed.length, 1);
   assert.equal(completed[0].members[0].result?.lastResult, "Finished review.");
 });

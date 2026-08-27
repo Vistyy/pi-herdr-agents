@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { formatCollectionNotification, formatNotification, registerTools } from "../src/index.js";
+import { registerTools } from "../src/index.js";
 import type { AgentManager } from "../src/manager.js";
+import { formatBatchCompletion } from "../src/notifications.js";
 import type { ExtensionConfig, OwnedAgentCollection, OwnedAgentRecord } from "../src/types.js";
 
 type RegisteredTool = {
@@ -117,12 +118,9 @@ test("start and send results do not terminate the parent turn", async () => {
   assert.equal("terminate" in reassigned, false);
 });
 
-test("completion notifications report lifecycle state without workflow instructions", () => {
-  const agent = record();
-  const individual = formatNotification(agent);
-  const grouped = formatCollectionNotification(collection(agent));
+test("a grouped completion report contains lifecycle state without workflow instructions", () => {
+  const grouped = formatBatchCompletion(collection(record()));
 
-  assert.equal(individual, "Owned agent analysis settled.\n\nInspection complete.");
   assert.equal(grouped, "Owned agent batch batch-1 settled.\n\n## analysis\n\nInspection complete.");
-  assert.doesNotMatch(`${individual}\n${grouped}`, /integrate|synthesize|continue|delegate|parent/i);
+  assert.doesNotMatch(grouped, /integrate|synthesize|continue|delegate|parent/i);
 });

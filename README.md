@@ -147,7 +147,8 @@ The extension exposes five tools to the parent model:
 Each child runs in the parent's working directory and current Herdr workspace.
 The assignment is sent as a user message after Pi's default system prompt, shared instructions, and identity instructions.
 Assignments in one `start_agents` batch run concurrently.
-The parent receives one completion follow-up after every member of the batch settles.
+After every member of a batch settles, the parent receives one grouped completion report at its next turn boundary.
+If the parent is already idle, the report starts a new turn immediately.
 
 Temporary agents close their tabs after reporting unless `keep_open` is true.
 A later message to a closed agent resumes its preserved Pi session in a new tab.

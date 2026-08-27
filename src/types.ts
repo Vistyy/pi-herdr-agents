@@ -39,7 +39,6 @@ export interface OwnedAgentRecord {
   cwd: string;
   assignment: number;
   completedAssignment?: number;
-  notifiedAssignment?: number;
   lastTask: string;
   lastResult?: string;
   lastError?: string;

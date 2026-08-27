@@ -1,34 +1,50 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { DeferredNotifications } from "../src/notifications.js";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { sendBatchCompletion } from "../src/notifications.js";
+import type { OwnedAgentCollection } from "../src/types.js";
 
-test("a completion during an active parent turn can be claimed before delivery", () => {
-  const delivered: string[] = [];
-  const notifications = new DeferredNotifications<string>(() => false, (value) => delivered.push(value));
+function completedBatch(): OwnedAgentCollection {
+  return {
+    id: "batch-1",
+    createdAt: 1,
+    notified: true,
+    members: [{
+      name: "review",
+      assignment: 1,
+      result: {
+        name: "review",
+        identity: "general",
+        keepOpen: false,
+        status: "closed",
+        cwd: "/repo",
+        assignment: 1,
+        completedAssignment: 1,
+        lastTask: "Review it.",
+        lastResult: "Review complete.",
+        updatedAt: 2,
+      },
+    }],
+  };
+}
 
-  notifications.complete("review:1", "result");
-  notifications.claim("review:1");
-  notifications.flush();
+test("a settled batch steers one grouped completion report into the parent", () => {
+  const sent: Array<{ message: unknown; options: unknown }> = [];
+  const pi = {
+    sendMessage(message: unknown, options: unknown) {
+      sent.push({ message, options });
+    },
+  } as unknown as Pick<ExtensionAPI, "sendMessage">;
+  const batch = completedBatch();
 
-  assert.deepEqual(delivered, []);
-});
+  sendBatchCompletion(pi, batch);
 
-test("an unclaimed deferred completion is delivered when the parent settles", () => {
-  const delivered: string[] = [];
-  const notifications = new DeferredNotifications<string>(() => false, (value) => delivered.push(value));
-
-  notifications.complete("review:1", "result");
-  notifications.flush();
-  notifications.flush();
-
-  assert.deepEqual(delivered, ["result"]);
-});
-
-test("an idle-parent completion is delivered immediately", () => {
-  const delivered: string[] = [];
-  const notifications = new DeferredNotifications<string>(() => true, (value) => delivered.push(value));
-
-  notifications.complete("review:1", "result");
-
-  assert.deepEqual(delivered, ["result"]);
+  assert.equal(sent.length, 1);
+  assert.deepEqual(sent[0].options, { deliverAs: "steer", triggerTurn: true });
+  assert.deepEqual(sent[0].message, {
+    customType: "pi-herdr-owned-agents",
+    content: "Owned agent batch batch-1 settled.\n\n## review\n\nReview complete.",
+    display: false,
+    details: { kind: "collection", collection: batch },
+  });
 });
